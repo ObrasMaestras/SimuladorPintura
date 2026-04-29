@@ -5,6 +5,8 @@ import torch
 from streamlit_drawable_canvas import st_canvas
 import os
 import requests
+import io
+import base64
 
 # Configuración de la página
 st.set_page_config(page_title="Simulador de Pintura Pro", layout="wide")
@@ -74,62 +76,74 @@ with col1:
             alto_nuevo = int(imagen.size[1] * ratio)
             imagen = imagen.resize((ancho_nuevo, alto_nuevo), Image.Resampling.LANCZOS)
         
-        # Convertir a numpy
-        imagen_np = np.array(imagen)
+        # Obtener dimensiones
         ancho, alto = imagen.size
         
         st.subheader("🖼️ Canvas Interactivo")
         st.info("👆 Haz clic en la imagen para seleccionar la zona a pintar")
         
-        # Canvas para capturar clics
+        # Mostrar la imagen primero para referencia
+        st.image(imagen, caption="Imagen cargada", use_container_width=False, width=ancho)
+        
+        # Canvas para capturar clics (SIN imagen de fondo, solo transparente)
         canvas_result = st_canvas(
-    fill_color="rgba(255, 165, 0, 0.3)",
-    stroke_width=2,
-    stroke_color="#FF0000",
-    background_image=imagen,  # ← CAMBIADO A imagen (PIL Image)
-    update_streamlit=True,
-    height=alto,
-    width=ancho,
-    drawing_mode="point",
-    key="canvas",
-)
+            fill_color="rgba(255, 0, 0, 0.3)",
+            stroke_width=3,
+            stroke_color="#FF0000",
+            background_color="rgba(0, 0, 0, 0)",
+            update_streamlit=True,
+            height=alto,
+            width=ancho,
+            drawing_mode="point",
+            point_display_radius=5,
+            key="canvas",
+        )
         
         # Procesar cuando se hace clic
         if canvas_result.json_data is not None:
             objetos = canvas_result.json_data.get("objects", [])
-            if objetos and st.button("🎨 PINTAR AHORA", type="primary"):
-                predictor = cargar_predictor()
+            if objetos:
+                st.success(f"✅ {len(objetos)} punto(s) seleccionado(s)")
                 
-                if predictor is None:
-                    st.error("No se pudo cargar el modelo. Verifica la instalación de MobileSAM.")
-                else:
-                    with st.spinner("🔍 Analizando y pintando..."):
-                        try:
-                            ultimo_click = objetos[-1]
-                            x = int(ultimo_click["left"])
-                            y = int(ultimo_click["top"])
-                            
-                            predictor.set_image(imagen_np)
-                            punto_input = np.array([[x, y]])
-                            etiqueta_input = np.array([1])
-                            
-                            mascaras, _, _ = predictor.predict(
-                                point_coords=punto_input,
-                                point_labels=etiqueta_input,
-                                multimask_output=False,
-                            )
-                            
-                            mascara = mascaras[0]
-                            
-                            color_rgb = tuple(int(color_pintura.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                            imagen_pintada = imagen_np.copy()
-                            imagen_pintada[mascara] = color_rgb
-                            
-                            st.success("✅ ¡Pintado exitoso!")
-                            st.image(imagen_pintada, caption="Resultado Final", use_container_width=True)
-                            
-                        except Exception as e:
-                            st.error(f"❌ Error al procesar: {e}")
+                if st.button("🎨 PINTAR AHORA", type="primary", use_container_width=True):
+                    predictor = cargar_predictor()
+                    
+                    if predictor is None:
+                        st.error("No se pudo cargar el modelo. Verifica la instalación de MobileSAM.")
+                    else:
+                        with st.spinner("🔍 Analizando y pintando..."):
+                            try:
+                                # Convertir a numpy para procesamiento
+                                imagen_np = np.array(imagen)
+                                
+                                ultimo_click = objetos[-1]
+                                x = int(ultimo_click["left"])
+                                y = int(ultimo_click["top"])
+                                
+                                st.info(f"📍 Coordenadas: ({x}, {y})")
+                                
+                                predictor.set_image(imagen_np)
+                                punto_input = np.array([[x, y]])
+                                etiqueta_input = np.array([1])
+                                
+                                mascaras, _, _ = predictor.predict(
+                                    point_coords=punto_input,
+                                    point_labels=etiqueta_input,
+                                    multimask_output=False,
+                                )
+                                
+                                mascara = mascaras[0]
+                                
+                                color_rgb = tuple(int(color_pintura.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                                imagen_pintada = imagen_np.copy()
+                                imagen_pintada[mascara] = color_rgb
+                                
+                                st.success("✅ ¡Pintado exitoso!")
+                                st.image(imagen_pintada, caption="Resultado Final", use_container_width=True)
+                                
+                            except Exception as e:
+                                st.error(f"❌ Error al procesar: {e}")
+                                st.exception(e)
     else:
         st.info("👈 Sube una imagen para comenzar")
 
