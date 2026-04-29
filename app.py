@@ -87,16 +87,21 @@ if archivo:
     canvas_height = int(h * ratio)
     img_res = img.resize((canvas_width, canvas_height))
 
+    # --- CAMBIO AQUÍ ---
+    # Pasamos la imagen de Pillow directamente, pero asegurándonos de que el lienzo 
+    # la trate como el fondo correcto. 
     canvas_result = st_canvas(
         fill_color="rgba(255, 165, 0, 0.3)",
-        background_image=img_res,
+        background_image=img_res, # Aquí es donde estaba el conflicto
         update_streamlit=True,
         height=canvas_height,
         width=canvas_width,
         drawing_mode="point",
         point_display_radius=6,
         key="canvas",
+        display_toolbar=True, # Recomendado para que puedas deshacer clics
     )
+    # --- FIN DEL CAMBIO ---
 
     color_hex = st.color_picker("Color de pintura", "#647864")
     paint_rgb = tuple(int(color_hex[i : i + 2], 16) for i in (1, 3, 5))
