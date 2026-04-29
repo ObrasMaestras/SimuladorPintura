@@ -83,7 +83,7 @@ with col1:
         st.info("👆 Haz clic en la imagen para seleccionar la zona a pintar")
         
         # Mostrar la imagen primero para referencia
-       st.image(imagen, caption="Imagen cargada", use_column_width=True)
+        st.image(imagen, caption="Imagen cargada", use_column_width=True)
         
         # Canvas para capturar clics (SIN imagen de fondo, solo transparente)
         canvas_result = st_canvas(
