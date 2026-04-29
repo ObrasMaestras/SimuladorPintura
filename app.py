@@ -1,11 +1,3 @@
-import os
-import subprocess
-import sys
-
-
-# Ejecutamos la instalación antes de que falle el código
-install_requirements()
-
 import streamlit as st
 import cv2
 import numpy as np
