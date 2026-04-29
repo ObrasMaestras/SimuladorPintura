@@ -2,20 +2,6 @@ import os
 import subprocess
 import sys
 
-# 1. FORZAR INSTALACIÓN DE LIBRERÍAS (Si la nube no las ve, las instalamos nosotros)
-def install_requirements():
-    librerias = [
-        "streamlit-drawable-canvas",
-        "opencv-python-headless",
-        "mobile-sam",
-        "torchvision",
-        "timm"
-    ]
-    for lib in librerias:
-        try:
-            __import__(lib.replace("-", "_"))
-        except ImportError:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", lib])
 
 # Ejecutamos la instalación antes de que falle el código
 install_requirements()
