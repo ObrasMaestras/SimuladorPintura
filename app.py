@@ -147,12 +147,12 @@ with col1:
         key="canvas",
     )
                 
-                with col_btn2:
-                    if st.button("🗑️ Borrar punto", use_container_width=True):
-                        st.rerun()
-            else:
-                st.info("👆 Haz clic en el recuadro blanco de arriba para seleccionar un área")
-    else:
+        with col_btn2:
+        if st.button("🗑️ Borrar punto", use_container_width=True):
+        st.rerun()
+        else:
+        st.info("👆 Haz clic en el recuadro blanco de arriba para seleccionar un área")
+        else:
         st.info("👈 Sube una imagen para comenzar")
 
 # Footer
