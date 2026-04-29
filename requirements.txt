@@ -1,3 +1,7 @@
 streamlit
 streamlit-drawable-canvas
 opencv-python-headless
+Pillow
+numpy
+torchvision
+mobile-sam
