@@ -146,15 +146,19 @@ with col1:
         drawing_mode="point",
         key="canvas",
     )
-                
-        with col_btn2:
-           if st.button("🗑️ Borrar punto", use_container_width=True):
-              st.rerun()
-        else:
-           st.info("👆 Haz clic en el recuadro blanco de arriba para seleccionar un área")
-        else:
-           st.info("👈 Sube una imagen para comenzar")
+     # Alineamos los botones debajo del canvas (Línea 149 aprox)
+    col_btn1, col_btn2 = st.columns(2)
 
-# Footer
-st.markdown("---")
-st.markdown("💡 **Instrucciones:** 1) Haz clic en el área blanca donde quieras pintar → 2) Presiona 'AGREGAR ESTA ÁREA' → 3) Cambia el color y repite → 4) Presiona 'VER RESULTADO FINAL'")
+    with col_btn1:
+        # Este botón lanzará la IA
+        if st.button("🎨 PINTAR AHORA", use_container_width=True):
+            try:
+                with st.spinner("Pintando..."):
+                    resultado = paint_wall(img, x, y, paint_rgb)
+                    st.image(resultado, caption="Resultado", use_container_width=True)
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    with col_btn2:
+        if st.button("🗑️ Borrar punto", use_container_width=True):
+            st.rerun() 
