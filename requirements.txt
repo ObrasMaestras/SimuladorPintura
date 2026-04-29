@@ -1,7 +1,0 @@
-streamlit
-opencv-python-headless
-numpy
-Pillow
-streamlit-drawable-canvas
-torchvision
-git+https://github.com/ChaoningZhang/MobileSAM.git
