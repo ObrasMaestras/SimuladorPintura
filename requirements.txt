@@ -1,3 +1,5 @@
 streamlit
 opencv-python-headless
-mobile-sam
+numpy
+Pillow
+git+https://github.com/ChaoningZhang/MobileSAM.git
