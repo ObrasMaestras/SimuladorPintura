@@ -47,83 +47,82 @@ def load_predictor(model_checkpoint: str):
     return SamPredictor(sam_model)
 
 
-def paint_wall(image: Image.Image, x: int, y: int, paint_color: tuple[int, int, int]) -> np.ndarray:
-    """Ejecuta segmentación por punto y aplica el color seleccionado."""
-    predictor = load_predictor(ensure_model_file())
-
-    image_np = np.array(image.convert("RGB"))
-    predictor.set_image(image_np)
-
-    masks, scores, _ = predictor.predict(
-        point_coords=np.array([[x, y]]),
-        point_labels=np.array([1]),
-        multimask_output=True,
-    )
-
-    if len(scores) == 0:
-        raise RuntimeError("MobileSAM no devolvió máscaras válidas para ese punto.")
-
-    best_mask = masks[int(np.argmax(scores))]
-
-    result = image_np.copy().astype(np.float32)
-    overlay = np.array(paint_color, dtype=np.float32)
-    result[best_mask] = (result[best_mask] * 0.5) + (overlay * 0.5)
-
-    return np.clip(result, 0, 255).astype(np.uint8)
-
-
-st.set_page_config(page_title="Simulador de Pintura", layout="centered")
-st.title("🖌️ Simulador de Pintura Pro")
-st.write("Sube una foto y haz clic en la pared que quieras pintar.")
-
-archivo = st.file_uploader("Sube tu foto", type=["jpg", "png", "jpeg"])
-
-if archivo:
-    img = Image.open(archivo).convert("RGB")
-    w, h = img.size
-
-    canvas_width = min(900, w)
-    ratio = canvas_width / w
-    canvas_height = int(h * ratio)
-    img_res = img.resize((canvas_width, canvas_height))
-
-    # --- CAMBIO AQUÍ ---
-    # Pasamos la imagen de Pillow directamente, pero asegurándonos de que el lienzo 
-    # la trate como el fondo correcto. 
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 165, 0, 0.3)",
-        background_image=imagen_np,
-        update_streamlit=True,
-        height=canvas_height,
-        width=canvas_width,
-        drawing_mode="point",
-        point_display_radius=6,
-        key="canvas",
-        display_toolbar=True, # Recomendado para que puedas deshacer clics
-    )
-    # --- FIN DEL CAMBIO ---
-
-    color_hex = st.color_picker("Color de pintura", "#647864")
-    paint_rgb = tuple(int(color_hex[i : i + 2], 16) for i in (1, 3, 5))
-
-    objects = []
-    if canvas_result.json_data:
-        objects = canvas_result.json_data.get("objects", []) or []
-
-    has_point = len(objects) > 0
-    if has_point:
-        last = objects[-1]
-        x = int(last.get("left", 0) / ratio)
-        y = int(last.get("top", 0) / ratio)
-        st.caption(f"Punto seleccionado: x={x}, y={y}")
+with col1:
+    if archivo_subido is not None:
+        # Cargar imagen
+        imagen = Image.open(archivo_subido).convert("RGB")
+        
+        # Redimensionar si es muy grande (para evitar lag en el canvas)
+        max_size = 800
+        if max(imagen.size) > max_size:
+            ratio = max_size / max(imagen.size)
+            nuevo_tamaño = tuple([int(dim * ratio) for dim in imagen.size])
+            imagen = imagen.resize(nuevo_tamaño, Image.Resampling.LANCZOS)
+        
+        # Convertir a numpy AQUÍ (antes del canvas)
+        imagen_np = np.array(imagen)
+        ancho, alto = imagen.size
+        
+        st.subheader("🖼️ Canvas Interactivo")
+        st.info("👆 Haz clic en la imagen para seleccionar la zona a pintar")
+        
+        # Canvas para capturar clics
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.3)",
+            stroke_width=2,
+            stroke_color="#FF0000",
+            background_image=imagen_np,
+            update_streamlit=True,
+            height=alto,
+            width=ancho,
+            drawing_mode="point",
+            key="canvas",
+        )
+        
+        # Procesar cuando se hace clic
+        if canvas_result.json_data is not None:
+            objetos = canvas_result.json_data.get("objects", [])
+            if objetos and st.button("🎨 PINTAR AHORA", type="primary"):
+                # Aquí es donde se carga el modelo (lazy loading)
+                predictor = cargar_predictor()
+                
+                if predictor is None:
+                    st.error("No se pudo cargar el modelo. Verifica la instalación de MobileSAM.")
+                else:
+                    with st.spinner("🔍 Analizando y pintando..."):
+                        try:
+                            # Obtener coordenadas del último clic
+                            ultimo_click = objetos[-1]
+                            x = int(ultimo_click["left"])
+                            y = int(ultimo_click["top"])
+                            
+                            # Generar máscara con MobileSAM
+                            predictor.set_image(imagen_np)
+                            punto_input = np.array([[x, y]])
+                            etiqueta_input = np.array([1])
+                            
+                            mascaras, _, _ = predictor.predict(
+                                point_coords=punto_input,
+                                point_labels=etiqueta_input,
+                                multimask_output=False,
+                            )
+                            
+                            mascara = mascaras[0]
+                            
+                            # Aplicar color a la máscara
+                            color_rgb = tuple(int(color_pintura.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                            imagen_pintada = imagen_np.copy()
+                            imagen_pintada[mascara] = color_rgb
+                            
+                            # Mostrar resultado
+                            st.success("✅ ¡Pintado exitoso!")
+                            st.image(imagen_pintada, caption="Resultado Final", use_container_width=True)
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error al procesar: {e}")
     else:
-        st.info("Haz clic sobre la pared en el lienzo para segmentar y pintar.")
+        st.info("👈 Sube una imagen para comenzar")
 
-    if st.button("🎨 PINTAR AHORA", disabled=not has_point):
-        try:
-            with st.spinner("Cargando IA y pintando..."):
-                resultado = paint_wall(img, x, y, paint_rgb)
-            st.image(resultado, caption="Resultado", use_container_width=True)
-        except Exception as exc:
-            st.error(f"No se pudo completar el proceso: {exc}")
-            st.exception(exc)
+# Footer
+st.markdown("---")
+st.markdown("💡 **Tip:** Funciona mejor con imágenes de interiores, muebles y objetos definidos")
