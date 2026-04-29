@@ -5,5 +5,5 @@ Pillow
 torch
 torchvision
 timm
-git+https://github.com/ChaoningZhang/MobileSAM.git
 streamlit-drawable-canvas
+git+https://github.com/ChaoningZhang/MobileSAM.git
