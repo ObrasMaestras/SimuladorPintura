@@ -92,7 +92,7 @@ if archivo:
     # la trate como el fondo correcto. 
     canvas_result = st_canvas(
         fill_color="rgba(255, 165, 0, 0.3)",
-        background_image=img_res, # Aquí es donde estaba el conflicto
+        background_image=imagen_np,
         update_streamlit=True,
         height=canvas_height,
         width=canvas_width,
