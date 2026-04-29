@@ -149,11 +149,11 @@ with col1:
                 
         with col_btn2:
         if st.button("🗑️ Borrar punto", use_container_width=True):
-        st.rerun()
+           st.rerun()
         else:
-        st.info("👆 Haz clic en el recuadro blanco de arriba para seleccionar un área")
+           st.info("👆 Haz clic en el recuadro blanco de arriba para seleccionar un área")
         else:
-        st.info("👈 Sube una imagen para comenzar")
+           st.info("👈 Sube una imagen para comenzar")
 
 # Footer
 st.markdown("---")
