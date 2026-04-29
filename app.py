@@ -5,24 +5,22 @@ from PIL import Image
 import os
 import urllib.request
 
-# DESCARGA AUTOMÁTICA DEL MODELO
+# 1. DESCARGA EL PESO (CEREBRO) DE LA IA
 if not os.path.exists("mobile_sam.pt"):
-    with st.spinner("Descargando motor de IA... espera un momento."):
-        url = "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt"
-        urllib.request.urlretrieve(url, "mobile_sam.pt")
+    url = "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt"
+    urllib.request.urlretrieve(url, "mobile_sam.pt")
 
 from mobile_sam import sam_model_registry, SamPredictor
 
-# Cargar IA
 @st.cache_resource
-def load_sam():
+def load_ia():
     return SamPredictor(sam_model_registry["vit_t"](checkpoint="mobile_sam.pt"))
 
-predictor = load_sam()
+predictor = load_ia()
 
-# Interfaz básica para que el punto se mueva SI O SI
-st.title("Simulador de Pintura Profesional")
-archivo = st.file_uploader("Sube la foto", type=["jpg", "png", "jpeg"])
+st.title("🖌️ Simulador Pro (Modo Web)")
+
+archivo = st.file_uploader("Sube tu foto", type=["jpg", "png", "jpeg"])
 
 if archivo:
     img = Image.open(archivo).convert("RGB")
@@ -30,13 +28,18 @@ if archivo:
     predictor.set_image(cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
     
     h, w, _ = img_np.shape
-    x = st.slider("Mover horizontal", 0, w, w//2)
-    y = st.slider("Mover vertical", 0, h, h//2)
+    x = st.slider("Mover Horizontal", 0, w, w//2)
+    y = st.slider("Mover Vertical", 0, h, h//2)
     
-    # Dibujar el punto
-    preview = img_np.copy()
-    cv2.circle(preview, (x, y), 25, (255, 255, 0), -1)
-    st.image(preview, use_container_width=True)
+    # Vista previa del punto
+    res = img_np.copy()
+    cv2.circle(res, (x, y), 25, (255, 255, 0), -1)
+    st.image(res, use_container_width=True)
     
-    if st.button("PINTAR"):
-        st.write("¡IA trabajando!")
+    if st.button("PINTAR PARED"):
+        masks, scores, _ = predictor.predict(np.array([[x, y]]), np.array([1]), multimask_output=True)
+        mask = masks[np.argmax(scores)]
+        
+        # Pintado rápido
+        img_np[mask] = img_np[mask] * 0.5 + np.array([75, 93, 82]) * 0.5
+        st.image(img_np, caption="Resultado", use_container_width=True)
