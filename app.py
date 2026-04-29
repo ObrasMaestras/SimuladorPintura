@@ -139,7 +139,7 @@ with col1:
             fill_color="rgba(255, 0, 0, 0.6)",
             stroke_width=8,
             stroke_color="#FF0000",
-                                    
+        )                        
                                 except Exception as e:
                                     st.error(f"❌ Error: {e}")
                                     st.exception(e)
