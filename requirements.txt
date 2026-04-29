@@ -2,4 +2,7 @@ streamlit
 opencv-python-headless
 numpy
 Pillow
+torch
+torchvision
+timm
 git+https://github.com/ChaoningZhang/MobileSAM.git
