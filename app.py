@@ -54,6 +54,8 @@ if 'areas_seleccionadas' not in st.session_state:
     st.session_state.areas_seleccionadas = []
 if 'imagen_actual' not in st.session_state:
     st.session_state.imagen_actual = None
+if 'canvas_key' not in st.session_state:
+    st.session_state.canvas_key = 0
 
 # Interfaz principal
 st.title("🎨 Simulador de Pintura Inteligente - Multi Color")
@@ -80,7 +82,7 @@ with col2:
                 col_a, col_b = st.columns([3, 1])
                 with col_a:
                     st.markdown(f"**Área {idx+1}**")
-                    st.markdown(f'<div style="background-color:{area["color"]}; width:100%; height:30px; border-radius:5px;"></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="background-color:{area["color"]}; width:100%; height:30px; border-radius:5px; border:1px solid #ccc;"></div>', unsafe_allow_html=True)
                 with col_b:
                     if st.button("🗑️", key=f"del_{idx}"):
                         st.session_state.areas_seleccionadas.pop(idx)
@@ -90,6 +92,7 @@ with col2:
             if st.button("🔄 LIMPIAR TODO", type="secondary", use_container_width=True):
                 st.session_state.areas_seleccionadas = []
                 st.session_state.imagen_actual = None
+                st.session_state.canvas_key += 1
                 st.rerun()
                 
             if st.button("✨ VER RESULTADO FINAL", type="primary", use_container_width=True):
@@ -102,7 +105,7 @@ with col2:
                 
                 st.image(imagen_final, caption=f"🎨 Combinación con {len(st.session_state.areas_seleccionadas)} colores", use_column_width=True)
         else:
-            st.info("👆 Haz clic abajo para agregar áreas")
+            st.info("👆 Selecciona áreas en la imagen")
 
 with col1:
     if archivo_subido is not None:
@@ -124,72 +127,18 @@ with col1:
         # Obtener dimensiones
         ancho, alto = imagen.size
         
-        st.subheader("🖼️ Selecciona las áreas a pintar")
+        st.subheader("🖼️ Paso 1: Imagen Original")
+        st.image(imagen, caption="Tu imagen", use_column_width=False, width=ancho)
         
-        # Mostrar la imagen de fondo
-        st.image(imagen, use_column_width=False, width=ancho)
+        st.markdown("---")
+        st.subheader("👇 Paso 2: HAZ CLIC EN ESTE RECUADRO GRIS")
+        st.info("Haz UN solo clic donde quieras pintar, luego presiona el botón")
         
-        # Canvas para capturar clics
-        st.markdown("**👇 Haz clic aquí para seleccionar un área:**")
+        # Canvas VISIBLE con fondo gris
         canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.5)",
-            stroke_width=5,
+            fill_color="rgba(255, 0, 0, 0.6)",
+            stroke_width=8,
             stroke_color="#FF0000",
-            background_color="rgba(255, 255, 255, 0.1)",
-            update_streamlit=True,
-            height=alto,
-            width=ancho,
-            drawing_mode="point",
-            point_display_radius=10,
-            key="canvas",
-        )
-        
-        # Procesar clics
-        if canvas_result.json_data is not None:
-            objetos = canvas_result.json_data.get("objects", [])
-            
-            if len(objetos) > 0:
-                # Tomar el último objeto (último clic)
-                ultimo = objetos[-1]
-                x = int(ultimo.get("left", 0))
-                y = int(ultimo.get("top", 0))
-                
-                st.success(f"📍 Punto seleccionado en coordenadas: ({x}, {y})")
-                st.info(f"🎨 Color seleccionado: {color_pintura}")
-                
-                col_btn1, col_btn2 = st.columns(2)
-                
-                with col_btn1:
-                    if st.button("➕ AGREGAR ESTA ÁREA", type="primary", use_container_width=True):
-                        with st.spinner("🔍 Detectando área con IA..."):
-                            predictor = cargar_predictor()
-                            
-                            if predictor is not None:
-                                try:
-                                    imagen_np = np.array(imagen)
-                                    
-                                    predictor.set_image(imagen_np)
-                                    punto_input = np.array([[x, y]])
-                                    etiqueta_input = np.array([1])
-                                    
-                                    mascaras, _, _ = predictor.predict(
-                                        point_coords=punto_input,
-                                        point_labels=etiqueta_input,
-                                        multimask_output=False,
-                                    )
-                                    
-                                    mascara = mascaras[0]
-                                    
-                                    # Guardar área seleccionada
-                                    st.session_state.areas_seleccionadas.append({
-                                        'mascara': mascara,
-                                        'color': color_pintura,
-                                        'coordenadas': (x, y)
-                                    })
-                                    
-                                    st.success(f"✅ ¡Área #{len(st.session_state.areas_seleccionadas)} agregada!")
-                                    st.balloons()
-                                    st.rerun()
                                     
                                 except Exception as e:
                                     st.error(f"❌ Error: {e}")
