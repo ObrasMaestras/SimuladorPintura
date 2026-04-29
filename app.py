@@ -136,15 +136,16 @@ with col1:
         
         # Canvas VISIBLE con fondo gris
         canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.6)",
-            stroke_width=8,
-            stroke_color="#FF0000",
-        )                        
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
-                                    st.exception(e)
-                            else:
-                                st.error("❌ No se pudo cargar el modelo de IA")
+        fill_color="rgba(255, 0, 0, 0.6)",
+        stroke_width=8,
+        stroke_color="#FF0000",
+        background_image=img_res, # Asegúrate de tener esta línea para ver la foto
+        update_streamlit=True,
+        height=canvas_height,
+        width=canvas_width,
+        drawing_mode="point",
+        key="canvas",
+    )
                 
                 with col_btn2:
                     if st.button("🗑️ Borrar punto", use_container_width=True):
