@@ -66,16 +66,73 @@ with col1:
         # Cargar imagen
         imagen = Image.open(archivo_subido).convert("RGB")
         
-        # Redimensionar si es muy grande (para evitar lag en el canvas)
+        # Redimensionar si es muy grande
         max_size = 800
         if max(imagen.size) > max_size:
             ratio = max_size / max(imagen.size)
-            nuevo_tamaño = tuple([int(dim  ratio) for dim in imagen.size])
-            imagen = imagen.resize(nuevo_tamaño, Image.Resampling.LANCZOS)
+            ancho_nuevo = int(imagen.size[0] * ratio)
+            alto_nuevo = int(imagen.size[1] * ratio)
+            imagen = imagen.resize((ancho_nuevo, alto_nuevo), Image.Resampling.LANCZOS)
         
-        # Convertir a numpy AQUÍ (antes del canvas)
+        # Convertir a numpy
         imagen_np = np.array(imagen)
         ancho, alto = imagen.size
         
         st.subheader("🖼️ Canvas Interactivo")
         st.info("👆 Haz clic en la imagen para seleccionar la zona a pintar")
+        
+        # Canvas para capturar clics
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.3)",
+            stroke_width=2,
+            stroke_color="#FF0000",
+            background_image=imagen_np,
+            update_streamlit=True,
+            height=alto,
+            width=ancho,
+            drawing_mode="point",
+            key="canvas",
+        )
+        
+        # Procesar cuando se hace clic
+        if canvas_result.json_data is not None:
+            objetos = canvas_result.json_data.get("objects", [])
+            if objetos and st.button("🎨 PINTAR AHORA", type="primary"):
+                predictor = cargar_predictor()
+                
+                if predictor is None:
+                    st.error("No se pudo cargar el modelo. Verifica la instalación de MobileSAM.")
+                else:
+                    with st.spinner("🔍 Analizando y pintando..."):
+                        try:
+                            ultimo_click = objetos[-1]
+                            x = int(ultimo_click["left"])
+                            y = int(ultimo_click["top"])
+                            
+                            predictor.set_image(imagen_np)
+                            punto_input = np.array([[x, y]])
+                            etiqueta_input = np.array([1])
+                            
+                            mascaras, _, _ = predictor.predict(
+                                point_coords=punto_input,
+                                point_labels=etiqueta_input,
+                                multimask_output=False,
+                            )
+                            
+                            mascara = mascaras[0]
+                            
+                            color_rgb = tuple(int(color_pintura.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                            imagen_pintada = imagen_np.copy()
+                            imagen_pintada[mascara] = color_rgb
+                            
+                            st.success("✅ ¡Pintado exitoso!")
+                            st.image(imagen_pintada, caption="Resultado Final", use_container_width=True)
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error al procesar: {e}")
+    else:
+        st.info("👈 Sube una imagen para comenzar")
+
+# Footer
+st.markdown("---")
+st.markdown("💡 **Tip:** Funciona mejor con imágenes de interiores, muebles y objetos definidos")
