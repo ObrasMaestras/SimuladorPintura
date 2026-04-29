@@ -2,8 +2,6 @@ streamlit
 opencv-python-headless
 numpy
 Pillow
-torch
-torchvision
-timm
 streamlit-drawable-canvas
+torchvision
 git+https://github.com/ChaoningZhang/MobileSAM.git
