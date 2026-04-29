@@ -54,6 +54,8 @@ if 'areas_seleccionadas' not in st.session_state:
     st.session_state.areas_seleccionadas = []
 if 'imagen_actual' not in st.session_state:
     st.session_state.imagen_actual = None
+if 'ultimo_punto' not in st.session_state:
+    st.session_state.ultimo_punto = None
 
 # Interfaz principal
 st.title("🎨 Simulador de Pintura Inteligente - Multi Color")
@@ -80,7 +82,8 @@ with col2:
                 col_a, col_b = st.columns([3, 1])
                 with col_a:
                     st.markdown(f"**Área {idx+1}** 🎨")
-                    st.color_picker(f"Color área {idx+1}", area['color'], key=f"color_{idx}", disabled=True)
+                    # Mostrar el color como un cuadro pequeño
+                    st.markdown(f'<div style="background-color:{area["color"]}; width:100%; height:30px; border-radius:5px;"></div>', unsafe_allow_html=True)
                 with col_b:
                     if st.button("🗑️", key=f"del_{idx}"):
                         st.session_state.areas_seleccionadas.pop(idx)
@@ -93,8 +96,14 @@ with col2:
                 st.rerun()
                 
             if st.button("✨ VER RESULTADO FINAL", type="primary", use_container_width=True):
-                st.session_state.mostrar_resultado = True
-                st.rerun()
+                # Mostrar resultado
+                imagen_final = st.session_state.imagen_actual.copy()
+                
+                for area in st.session_state.areas_seleccionadas:
+                    color_rgb = tuple(int(area['color'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                    imagen_final[area['mascara']] = color_rgb
+                
+                st.image(imagen_final, caption=f"🎨 Combinación con {len(st.session_state.areas_seleccionadas)} colores", use_column_width=True)
         else:
             st.info("👆 Haz clic en la imagen para agregar áreas")
 
@@ -104,7 +113,7 @@ with col1:
         imagen = Image.open(archivo_subido).convert("RGB")
         
         # Redimensionar si es muy grande
-        max_size = 800
+        max_size = 600
         if max(imagen.size) > max_size:
             ratio = max_size / max(imagen.size)
             ancho_nuevo = int(imagen.size[0] * ratio)
@@ -118,30 +127,39 @@ with col1:
         # Obtener dimensiones
         ancho, alto = imagen.size
         
-        st.subheader("🖼️ Canvas Interactivo")
-        st.info("👆 **Paso 1:** Haz clic en un área → **Paso 2:** Presiona 'AGREGAR ÁREA' → **Paso 3:** Repite para más áreas")
+        st.subheader("🖼️ Selecciona las áreas a pintar")
+        st.info("👉 **Paso 1:** Haz clic en la imagen → **Paso 2:** Presiona 'AGREGAR ÁREA'")
         
-        # Canvas para capturar clics con la imagen de fondo
+        # Primero mostrar la imagen de fondo
+        st.image(imagen, use_column_width=False, width=ancho)
+        
+        # Luego el canvas transparente para capturar clics
+        st.markdown("**Haz clic aquí abajo ⬇️**")
         canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.3)",
-            stroke_width=3,
+            fill_color="rgba(255, 0, 0, 0.5)",
+            stroke_width=5,
             stroke_color="#FF0000",
-            background_image=imagen,
+            background_color="rgba(255, 255, 255, 0.1)",
             update_streamlit=True,
             height=alto,
             width=ancho,
             drawing_mode="point",
-            point_display_radius=8,
+            point_display_radius=10,
             key="canvas",
         )
         
-        # Botón para agregar área
+        # Procesar clics
         if canvas_result.json_data is not None:
             objetos = canvas_result.json_data.get("objects", [])
-            if objetos:
-                ultimo_clic = objetos[-1]
-                x = int(ultimo_clic["left"])
-                y = int(ultimo_clic["top"])
+            
+            # Filtrar solo los objetos de tipo "circle" (puntos)
+            puntos = [obj for obj in objetos if obj.get("type") == "circle"]
+            
+            if puntos:
+                # Tomar solo el último punto
+                ultimo_punto = puntos[-1]
+                x = int(ultimo_punto["left"])
+                y = int(ultimo_punto["top"])
                 
                 st.success(f"📍 Punto seleccionado: ({x}, {y})")
                 
@@ -172,34 +190,14 @@ with col1:
                                     'coordenadas': (x, y)
                                 })
                                 
-                                st.success(f"✅ Área #{len(st.session_state.areas_seleccionadas)} agregada!")
-                                st.rerun()
+                                st.success(f"✅ Área #{len(st.session_state.areas_seleccionadas)} agregada con color {color_pintura}!")
+                                st.balloons()
                                 
                             except Exception as e:
                                 st.error(f"❌ Error: {e}")
-        
-        # Mostrar resultado final si se presionó el botón
-        if hasattr(st.session_state, 'mostrar_resultado') and st.session_state.mostrar_resultado:
-            if st.session_state.areas_seleccionadas:
-                st.markdown("---")
-                st.subheader("✨ Resultado Final - Combinación de Colores")
-                
-                imagen_final = st.session_state.imagen_actual.copy()
-                
-                # Aplicar todos los colores
-                for area in st.session_state.areas_seleccionadas:
-                    color_rgb = tuple(int(area['color'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                    imagen_final[area['mascara']] = color_rgb
-                
-                st.image(imagen_final, caption=f"🎨 Combinación con {len(st.session_state.areas_seleccionadas)} colores", use_column_width=True)
-                
-                if st.button("⬇️ Descargar Resultado", type="secondary"):
-                    st.info("💡 Haz clic derecho en la imagen → Guardar imagen como...")
-                
-                st.session_state.mostrar_resultado = False
     else:
         st.info("👈 Sube una imagen para comenzar")
 
 # Footer
 st.markdown("---")
-st.markdown("💡 **Tip:** Puedes seleccionar paredes, muebles, pisos... ¡Experimenta con diferentes combinaciones!")
+st.markdown("💡 **Tip:** Selecciona diferentes paredes, cambia el color en el panel derecho, y agrégalas. Al final presiona 'VER RESULTADO FINAL'")
