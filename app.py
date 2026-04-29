@@ -83,16 +83,16 @@ with col1:
         
         # Canvas para capturar clics
         canvas_result = st_canvas(
-            fill_color="rgba(255, 165, 0, 0.3)",
-            stroke_width=2,
-            stroke_color="#FF0000",
-            background_image=imagen_np,
-            update_streamlit=True,
-            height=alto,
-            width=ancho,
-            drawing_mode="point",
-            key="canvas",
-        )
+    fill_color="rgba(255, 165, 0, 0.3)",
+    stroke_width=2,
+    stroke_color="#FF0000",
+    background_image=imagen,  # ← CAMBIADO A imagen (PIL Image)
+    update_streamlit=True,
+    height=alto,
+    width=ancho,
+    drawing_mode="point",
+    key="canvas",
+)
         
         # Procesar cuando se hace clic
         if canvas_result.json_data is not None:
