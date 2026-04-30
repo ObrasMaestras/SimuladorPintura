@@ -6,40 +6,108 @@ import cv2
 import torch
 import os
 import requests
+from scipy import ndimage
 
-# Configuración
 st.set_page_config(page_title="Simulador de Pintura Profesional", layout="wide")
 
-# ============ TÉCNICA 1: MODO MULTIPLICAR (BLENDING MODE) ============
-def aplicar_color_multiplicar(imagen_np, mascara, color_hex, opacidad=0.4):
+def expandir_pared_completa(mascara_inicial, imagen_np, punto_clic):
     """
-    Aplica color usando MODO MULTIPLICAR como Photoshop
-    Preserva texturas, sombras y luces originales
+    EXPANSIÓN AGRESIVA: Detecta TODA la pared incluyendo áreas detrás de objetos
     """
-    # Convertir color hex a RGB
-    color_rgb = np.array([int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)], dtype=float)
+    x, y = punto_clic
+    alto, ancho = imagen_np.shape[:2]
     
-    # Normalizar a 0-1
-    imagen_float = imagen_np.astype(float) / 255.0
-    color_float = color_rgb / 255.0
+    # 1. ANÁLISIS DE COLOR - Obtener color de referencia de la pared
+    radio = 15
+    x1, x2 = max(0, x-radio), min(ancho, x+radio)
+    y1, y2 = max(0, y-radio), min(alto, y+radio)
+    region_ref = imagen_np[y1:y2, x1:x2]
+    color_pared_rgb = np.median(region_ref.reshape(-1, 3), axis=0)
     
-    # MODO MULTIPLICAR: multiplicar cada pixel por el color
-    imagen_multiplicada = imagen_float.copy()
-    for i in range(3):  # RGB
-        imagen_multiplicada[:, :, i] = imagen_float[:, :, i] * color_float[i]
+    # 2. CONVERTIR A MÚLTIPLES ESPACIOS DE COLOR
+    img_lab = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2LAB).astype(float)
+    color_lab = cv2.cvtColor(np.uint8([[color_pared_rgb]]), cv2.COLOR_RGB2LAB)[0, 0].astype(float)
     
-    # ALPHA BLENDING: mezclar original con multiplicado usando opacidad
-    imagen_final = imagen_float.copy()
-    for i in range(3):
-        imagen_final[mascara, i] = (
-            imagen_float[mascara, i] * (1 - opacidad) +
-            imagen_multiplicada[mascara, i] * opacidad
-        )
+    img_hsv = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2HSV).astype(float)
+    color_hsv = cv2.cvtColor(np.uint8([[color_pared_rgb]]), cv2.COLOR_RGB2HSV)[0, 0].astype(float)
     
-    # Convertir de vuelta a 0-255
-    return (imagen_final * 255).astype(np.uint8)
+    # 3. SIMILITUD DE COLOR (muy tolerante para incluir sombras)
+    diff_lab = np.sqrt(np.sum((img_lab - color_lab) ** 2, axis=2))
+    diff_h = np.abs(img_hsv[:, :, 0] - color_hsv[0])
+    diff_h = np.minimum(diff_h, 180 - diff_h)  # Circular
+    
+    # Umbrales MUY generosos para capturar toda la pared
+    umbral_lab = np.percentile(diff_lab[mascara_inicial], 85)
+    umbral_h = np.percentile(diff_h[mascara_inicial], 90)
+    
+    mascara_color = (diff_lab < umbral_lab * 2.0) & (diff_h < umbral_h * 1.5)
+    
+    # 4. DETECTAR OBJETOS 3D QUE SOBRESALEN (cuadros, cables)
+    gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
+    
+    # Detectar bordes MUY fuertes (objetos con marco)
+    bordes_fuertes = cv2.Canny(gris, 100, 200)
+    
+    # Detectar texturas diferentes (cuadros tienen textura distinta a pared lisa)
+    laplaciano = cv2.Laplacian(gris, cv2.CV_64F)
+    textura_alta = np.abs(laplaciano) > np.percentile(np.abs(laplaciano), 95)
+    
+    # 5. FLOOD FILL desde el punto clickeado (expansión agresiva)
+    mascara_flood = np.zeros((alto + 2, ancho + 2), dtype=np.uint8)
+    semilla = mascara_color.astype(np.uint8) * 255
+    cv2.floodFill(semilla, mascara_flood, (x, y), 255, 
+                  loDiff=(30, 30, 30), upDiff=(30, 30, 30),
+                  flags=cv2.FLOODFILL_FIXED_RANGE)
+    mascara_flood = semilla > 0
+    
+    # 6. COMBINAR: color similar O flood fill
+    mascara_expandida = np.logical_or(mascara_color, mascara_flood)
+    
+    # 7. EXCLUIR solo objetos 3D muy obvios
+    # Crear máscara de objetos: bordes fuertes Y textura alta
+    kernel = np.ones((7, 7), np.uint8)
+    bordes_dilatados = cv2.dilate(bordes_fuertes, kernel, iterations=2)
+    objetos_3d = np.logical_and(bordes_dilatados > 0, textura_alta)
+    
+    # Dilatar objetos para excluir bien
+    objetos_3d = ndimage.binary_dilation(objetos_3d, structure=np.ones((5, 5)), iterations=3)
+    
+    # Aplicar exclusión
+    mascara_sin_objetos = np.logical_and(mascara_expandida, ~objetos_3d)
+    
+    # 8. MANTENER SOLO REGIÓN CONECTADA AL CLIC
+    etiquetas, num = ndimage.label(mascara_sin_objetos)
+    if 0 <= y < alto and 0 <= x < ancho and etiquetas[y, x] > 0:
+        mascara_region = (etiquetas == etiquetas[y, x])
+    else:
+        mascara_region = mascara_sin_objetos
+    
+    # 9. RELLENAR HUECOS INTERNOS (pintar detrás de cables, plantas pequeñas)
+    mascara_rellena = ndimage.binary_fill_holes(mascara_region)
+    
+    # 10. EXPANSIÓN MORFOLÓGICA para llegar a esquinas
+    estructura = np.ones((7, 7))
+    mascara_final = ndimage.binary_dilation(mascara_rellena, structure=estructura, iterations=3)
+    
+    # 11. CIERRE para conectar áreas cercanas
+    mascara_final = ndimage.binary_closing(mascara_final, structure=estructura, iterations=5)
+    
+    return mascara_final
 
-# ============ TÉCNICA 2: MÁSCARA PRECISA CON MOBILESAM ============
+def aplicar_color_realista(imagen_np, mascara, color_hex, intensidad=0.6):
+    """Aplica color preservando luminosidad"""
+    color_rgb = np.array([int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)])
+    
+    img_hsv = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2HSV).astype(float)
+    color_hsv = cv2.cvtColor(np.uint8([[color_rgb]]), cv2.COLOR_RGB2HSV)[0, 0].astype(float)
+    
+    img_resultado = img_hsv.copy()
+    img_resultado[mascara, 0] = color_hsv[0]
+    img_resultado[mascara, 1] = color_hsv[1] * intensidad + img_hsv[mascara, 1] * (1 - intensidad)
+    
+    img_resultado = img_resultado.astype(np.uint8)
+    return cv2.cvtColor(img_resultado, cv2.COLOR_HSV2RGB)
+
 @st.cache_data
 def descargar_modelo():
     modelo_path = "mobile_sam.pt"
@@ -80,17 +148,12 @@ if 'paredes' not in st.session_state:
 if 'imagen_original' not in st.session_state:
     st.session_state.imagen_original = None
 
-st.title("🎨 Simulador de Pintura - Técnica Profesional")
-st.markdown("**Modo Multiplicar + Alpha Blending (como Photoshop/Gemini)**")
+st.title("🎨 Simulador de Pintura - Detección Completa")
+st.markdown("**Expansión agresiva: pinta TODA la pared incluyendo áreas detrás de objetos**")
 
-# Controles superiores
-col_opacidad, col_info = st.columns([1, 2])
-with col_opacidad:
-    opacidad = st.slider("💧 Opacidad del color", 0.1, 1.0, 0.4, 0.05, 
-                         help="40% = Realista (recomendado). 100% = Color sólido")
-
-with col_info:
-    st.info(f"✨ **Opacidad actual: {int(opacidad*100)}%** - A menor opacidad, más textura natural se preserva")
+st.markdown("---")
+intensidad = st.slider("💧 Intensidad del color", 0.3, 1.0, 0.6, 0.05,
+                       help="Controla qué tan fuerte se ve el color")
 
 archivo = st.file_uploader("📸 Sube tu foto", type=["jpg", "jpeg", "png"])
 
@@ -111,16 +174,15 @@ if archivo:
     col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        st.markdown("**🎨 Elige tu color:**")
+        st.markdown("**🎨 Color:**")
         color = st.color_picker("", "#8FBC8F", label_visibility="collapsed")
     
     with col2:
-        st.markdown("**Preview del color:**")
-        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; box-shadow: 3px 3px 10px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; margin-top:25px;"></div>', unsafe_allow_html=True)
     
     with col3:
         if st.session_state.paredes:
-            if st.button("🗑️ Borrar"):
+            if st.button("🗑️"):
                 st.session_state.paredes = []
                 st.rerun()
     
@@ -129,17 +191,17 @@ if archivo:
     if st.session_state.paredes:
         img_resultado = st.session_state.imagen_original.copy()
         for pared in st.session_state.paredes:
-            img_resultado = aplicar_color_multiplicar(
+            img_resultado = aplicar_color_realista(
                 img_resultado, 
                 pared['mask'], 
                 pared['color'],
-                pared['opacidad']
+                pared['intensidad']
             )
         img_mostrar = Image.fromarray(img_resultado)
-        st.success(f"✅ {len(st.session_state.paredes)} pared(es) - Modo Multiplicar aplicado")
+        st.success(f"✅ {len(st.session_state.paredes)} pared(es) - Expansión completa")
     else:
         img_mostrar = img
-        st.info("👇 **HAZ UN CLIC** en la pared que quieres pintar")
+        st.info("👇 **HAZ CLIC** en la pared")
     
     value = streamlit_image_coordinates(img_mostrar, key="image_coords")
     
@@ -147,10 +209,10 @@ if archivo:
         x = value["x"]
         y = value["y"]
         
-        st.success(f"📍 Punto seleccionado: ({x}, {y})")
+        st.success(f"📍 Clic: ({x}, {y})")
         
-        if st.button("🎨 PINTAR CON MODO MULTIPLICAR", type="primary"):
-            with st.spinner("🤖 MobileSAM detectando pared..."):
+        if st.button("🎨 PINTAR PARED COMPLETA", type="primary"):
+            with st.spinner("🤖 Analizando y expandiendo..."):
                 predictor = cargar_predictor()
                 
                 if predictor:
@@ -158,25 +220,31 @@ if archivo:
                         img_np = np.array(img)
                         predictor.set_image(img_np)
                         
-                        # Generar múltiples máscaras y elegir la mejor
+                        # Máscara inicial con SAM
                         masks, scores, _ = predictor.predict(
                             point_coords=np.array([[x, y]]),
                             point_labels=np.array([1]),
-                            multimask_output=True,  # Genera 3 opciones
+                            multimask_output=True,
                         )
                         
-                        # Elegir máscara con mejor score
                         mejor_idx = np.argmax(scores)
-                        mascara = masks[mejor_idx]
+                        mascara_inicial = masks[mejor_idx]
                         
-                        # Guardar con opacidad actual
+                        # EXPANSIÓN COMPLETA
+                        mascara_final = expandir_pared_completa(
+                            mascara_inicial,
+                            img_np,
+                            (x, y)
+                        )
+                        
+                        # Guardar
                         st.session_state.paredes.append({
-                            'mask': mascara,
+                            'mask': mascara_final,
                             'color': color,
-                            'opacidad': opacidad
+                            'intensidad': intensidad
                         })
                         
-                        st.success(f"🎉 ¡Pared #{len(st.session_state.paredes)} pintada con Modo Multiplicar!")
+                        st.success(f"🎉 ¡Pared completa pintada!")
                         st.balloons()
                         st.rerun()
                         
@@ -185,41 +253,31 @@ if archivo:
     
     if st.session_state.paredes:
         st.markdown("---")
-        st.markdown("### 📋 Paredes Pintadas:")
+        st.markdown("### 📋 Paredes:")
         for i, p in enumerate(st.session_state.paredes):
-            col_a, col_b, col_c, col_d = st.columns([1, 2, 2, 1])
+            col_a, col_b, col_c = st.columns([1, 3, 1])
             with col_a:
                 st.markdown(f"**{i+1}**")
             with col_b:
                 st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:8px; border:2px solid #000;"></div>', unsafe_allow_html=True)
             with col_c:
-                st.markdown(f"*Opacidad: {int(p['opacidad']*100)}%*")
-            with col_d:
                 if st.button("❌", key=f"d{i}"):
                     st.session_state.paredes.pop(i)
                     st.rerun()
 
 else:
-    st.info("👆 Sube una foto de tu habitación")
+    st.info("👆 Sube una foto")
 
 st.markdown("---")
 st.markdown("""
-### 🚀 Técnicas Profesionales Implementadas:
+### 🚀 Algoritmo de Expansión Completa:
 
-#### 1️⃣ **Modo Multiplicar (Multiply Blending)**
-- El color se "fusiona" con la textura original
-- Las sombras se oscurecen naturalmente
-- Las luces se preservan realísticamente
+1. ✅ **Análisis de color LAB + HSV** - Detecta toda el área de color similar
+2. ✅ **Flood Fill agresivo** - Expande desde el clic hasta los bordes
+3. ✅ **Detección de objetos 3D** - Identifica cuadros por bordes + textura
+4. ✅ **Relleno de huecos** - Pinta detrás de cables, plantas, sombras
+5. ✅ **Expansión morfológica** - Llega hasta todas las esquinas
+6. ✅ **Exclusión inteligente** - NO pinta los objetos mismos
 
-#### 2️⃣ **Alpha Blending (Opacidad)**
-- **40% (recomendado)**: Máximo realismo, la textura atraviesa
-- **70%**: Color más intenso pero natural
-- **100%**: Color sólido (menos realista)
-
-#### 3️⃣ **MobileSAM - Segmentación Precisa**
-- Detecta bordes automáticamente
-- No pinta cuadros, muebles o techos
-- Un solo clic = pared completa
-
-💡 **Resultado:** Idéntico a edición profesional de Photoshop
+💡 **Resultado:** Cubre TODA la pared incluyendo áreas ocultas
 """)
