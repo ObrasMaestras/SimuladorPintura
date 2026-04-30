@@ -2,21 +2,20 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 import torch
-from streamlit_drawable_canvas import st_canvas
+from streamlit_image_coordinates import streamlit_image_coordinates
 import os
 import requests
 
-# Configuración de la página
-st.set_page_config(page_title="Simulador de Pintura", layout="wide", initial_sidebar_state="collapsed")
+# Configuración
+st.set_page_config(page_title="Simulador de Pintura", layout="wide")
 
-# Función para descargar el modelo MobileSAM
+# Función para descargar el modelo
 @st.cache_data
 def descargar_modelo():
-    """Descarga el modelo MobileSAM si no existe localmente"""
     modelo_path = "mobile_sam.pt"
     if not os.path.exists(modelo_path):
         url = "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt"
-        with st.spinner("⏳ Descargando modelo MobileSAM..."):
+        with st.spinner("⏳ Descargando modelo..."):
             try:
                 response = requests.get(url, stream=True)
                 response.raise_for_status()
@@ -24,14 +23,13 @@ def descargar_modelo():
                     for chunk in response.iter_content(chunk_size=8192):
                         f.write(chunk)
             except Exception as e:
-                st.error(f"❌ Error descargando el modelo: {e}")
+                st.error(f"Error: {e}")
                 return None
     return modelo_path
 
-# Función para cargar el predictor
+# Función para cargar predictor
 @st.cache_resource
 def cargar_predictor():
-    """Carga el modelo MobileSAM en memoria"""
     try:
         from mobile_sam import sam_model_registry, SamPredictor
         modelo_path = descargar_modelo()
@@ -42,177 +40,134 @@ def cargar_predictor():
         modelo = sam_model_registry["vit_t"](checkpoint=modelo_path)
         modelo.to(device=device)
         modelo.eval()
-        predictor = SamPredictor(modelo)
-        return predictor
+        return SamPredictor(modelo)
     except Exception as e:
-        st.error(f"❌ Error cargando el predictor: {e}")
+        st.error(f"Error: {e}")
         return None
 
-# Inicializar session_state
-if 'areas_pintadas' not in st.session_state:
-    st.session_state.areas_pintadas = []
-if 'imagen_base' not in st.session_state:
-    st.session_state.imagen_base = None
+# Inicializar
+if 'paredes' not in st.session_state:
+    st.session_state.paredes = []
+if 'imagen_original' not in st.session_state:
+    st.session_state.imagen_original = None
 
 # Título
-st.title("🎨 Simulador de Pintura para Paredes")
-st.markdown("### Selecciona paredes y prueba diferentes colores")
+st.title("🎨 Simulador de Pintura Simple")
 
-# Layout
-archivo_subido = st.file_uploader("📸 Sube una foto de tu habitación", type=["jpg", "jpeg", "png"])
+# Subir foto
+archivo = st.file_uploader("📸 Sube tu foto", type=["jpg", "jpeg", "png"])
 
-if archivo_subido is not None:
-    # Cargar y preparar imagen
-    imagen = Image.open(archivo_subido).convert("RGB")
+if archivo:
+    # Cargar imagen
+    img = Image.open(archivo).convert("RGB")
     
-    # Redimensionar para móvil
-    max_size = 700
-    if max(imagen.size) > max_size:
-        ratio = max_size / max(imagen.size)
-        nuevo_ancho = int(imagen.size[0] * ratio)
-        nuevo_alto = int(imagen.size[1] * ratio)
-        imagen = imagen.resize((nuevo_ancho, nuevo_alto), Image.Resampling.LANCZOS)
+    # Redimensionar
+    max_size = 800
+    if max(img.size) > max_size:
+        ratio = max_size / max(img.size)
+        nuevo_w = int(img.size[0] * ratio)
+        nuevo_h = int(img.size[1] * ratio)
+        img = img.resize((nuevo_w, nuevo_h), Image.Resampling.LANCZOS)
     
-    # Guardar imagen base
-    if st.session_state.imagen_base is None:
-        st.session_state.imagen_base = np.array(imagen)
+    # Guardar original
+    if st.session_state.imagen_original is None:
+        st.session_state.imagen_original = np.array(img)
     
-    ancho, alto = imagen.size
-    
-    # Selector de color GRANDE
+    # Selector de color
     st.markdown("---")
-    col_color, col_boton = st.columns([2, 1])
+    col1, col2 = st.columns([1, 3])
     
-    with col_color:
-        st.markdown("### 🎨 Elige el color:")
-        color_actual = st.color_picker("", "#3498db", key="color_picker", label_visibility="collapsed")
-        st.markdown(f'<div style="background:{color_actual}; height:60px; border-radius:10px; border:3px solid #333;"></div>', unsafe_allow_html=True)
+    with col1:
+        color = st.color_picker("Color:", "#FF6B6B")
     
-    with col_boton:
-        st.markdown("### ")
-        st.markdown("### ")
-        if st.session_state.areas_pintadas:
-            if st.button("🔄 BORRAR TODO"):
-                st.session_state.areas_pintadas = []
+    with col2:
+        if st.session_state.paredes:
+            if st.button("🗑️ BORRAR TODO"):
+                st.session_state.paredes = []
                 st.rerun()
     
-    # Mostrar imagen actual o resultado
+    # Mostrar resultado actual
     st.markdown("---")
-    st.markdown("### 📸 Tu Habitación:")
-    
-    if st.session_state.areas_pintadas:
-        # Mostrar imagen con pinturas aplicadas
-        imagen_con_pinturas = st.session_state.imagen_base.copy()
-        for area in st.session_state.areas_pintadas:
-            color_rgb = tuple(int(area['color'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            imagen_con_pinturas[area['mascara']] = color_rgb
-        
-        st.image(imagen_con_pinturas, use_column_width=True, caption=f"{len(st.session_state.areas_pintadas)} área(s) pintada(s)")
+    if st.session_state.paredes:
+        img_resultado = st.session_state.imagen_original.copy()
+        for pared in st.session_state.paredes:
+            rgb = tuple(int(pared['color'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            img_resultado[pared['mask']] = rgb
+        img_mostrar = Image.fromarray(img_resultado)
+        st.markdown(f"**✅ {len(st.session_state.paredes)} pared(es) pintada(s)**")
     else:
-        st.image(imagen, use_column_width=True, caption="Imagen original")
+        img_mostrar = img
+        st.markdown("**👇 HAZ CLIC EN LA PARED QUE QUIERES PINTAR:**")
     
-    # Canvas simplificado
-    st.markdown("---")
-    st.markdown("### 👇 HAZ CLIC EN LA PARED QUE QUIERES PINTAR:")
-    st.info("💡 Toca UNA VEZ en la pared, luego presiona 'PINTAR'")
-    
-    # Canvas con imagen de fondo
-    canvas_result = st_canvas(
-        fill_color="rgba(0, 0, 0, 0)",
-        stroke_width=0,
-        stroke_color="rgba(0, 0, 0, 0)",
-        background_image=Image.fromarray(st.session_state.imagen_base),
-        update_streamlit=True,
-        height=alto,
-        width=ancho,
-        drawing_mode="point",
-        point_display_radius=15,
-        key="canvas_simple",
+    # Capturar clic en la imagen
+    value = streamlit_image_coordinates(
+        img_mostrar,
+        key="image_coords"
     )
     
     # Procesar clic
-    if canvas_result.json_data is not None:
-        objetos = canvas_result.json_data.get("objects", [])
+    if value is not None:
+        x = value["x"]
+        y = value["y"]
         
-        if len(objetos) > 0:
-            # Tomar SOLO el primer punto
-            punto = objetos[0]
-            x = int(punto.get("left", 0))
-            y = int(punto.get("top", 0))
-            
-            st.success(f"✅ Punto seleccionado en la imagen: ({x}, {y})")
-            
-            # Botón grande para pintar
-            if st.button("🎨 PINTAR ESTA PARED", type="primary"):
-                with st.spinner("🤖 Detectando la pared con inteligencia artificial..."):
-                    predictor = cargar_predictor()
-                    
-                    if predictor is not None:
-                        try:
-                            imagen_np = np.array(imagen)
-                            
-                            # Configurar predictor
-                            predictor.set_image(imagen_np)
-                            punto_input = np.array([[x, y]])
-                            etiqueta_input = np.array([1])
-                            
-                            # Generar máscara
-                            mascaras, scores, _ = predictor.predict(
-                                point_coords=punto_input,
-                                point_labels=etiqueta_input,
-                                multimask_output=True,
-                            )
-                            
-                            # Tomar la máscara con mejor score
-                            mejor_idx = np.argmax(scores)
-                            mascara = mascaras[mejor_idx]
-                            
-                            # Guardar área pintada
-                            st.session_state.areas_pintadas.append({
-                                'mascara': mascara,
-                                'color': color_actual,
-                                'coordenadas': (x, y)
-                            })
-                            
-                            st.success(f"🎉 ¡Pared pintada! Total: {len(st.session_state.areas_pintadas)} área(s)")
-                            st.balloons()
-                            st.rerun()
-                            
-                        except Exception as e:
-                            st.error(f"❌ Error: {str(e)}")
-                    else:
-                        st.error("❌ No se pudo cargar el modelo de IA")
-        else:
-            st.warning("👆 Toca en la imagen de arriba para seleccionar una pared")
+        st.success(f"📍 Clic en: ({x}, {y})")
+        
+        if st.button("🎨 PINTAR ESTA PARED", type="primary"):
+            with st.spinner("🤖 Detectando pared..."):
+                predictor = cargar_predictor()
+                
+                if predictor:
+                    try:
+                        img_np = np.array(img)
+                        predictor.set_image(img_np)
+                        
+                        masks, scores, _ = predictor.predict(
+                            point_coords=np.array([[x, y]]),
+                            point_labels=np.array([1]),
+                            multimask_output=True,
+                        )
+                        
+                        # Mejor máscara
+                        mejor = np.argmax(scores)
+                        mask = masks[mejor]
+                        
+                        # Guardar
+                        st.session_state.paredes.append({
+                            'mask': mask,
+                            'color': color
+                        })
+                        
+                        st.success(f"✅ Pared pintada!")
+                        st.balloons()
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Error: {e}")
     
-    # Resumen de áreas pintadas
-    if st.session_state.areas_pintadas:
+    # Lista de paredes
+    if st.session_state.paredes:
         st.markdown("---")
-        st.markdown("### 📋 Paredes Pintadas:")
-        
-        for idx, area in enumerate(st.session_state.areas_pintadas):
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown(f"**Pared {idx+1}:**")
-                st.markdown(f'<div style="background:{area["color"]}; height:40px; border-radius:5px; border:2px solid #000;"></div>', unsafe_allow_html=True)
-            with col2:
-                if st.button("❌", key=f"borrar_{idx}"):
-                    st.session_state.areas_pintadas.pop(idx)
+        st.markdown("### 📋 Paredes:")
+        for i, p in enumerate(st.session_state.paredes):
+            col_a, col_b = st.columns([4, 1])
+            with col_a:
+                st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:5px; border:2px solid black;"></div>', unsafe_allow_html=True)
+            with col_b:
+                if st.button("❌", key=f"del{i}"):
+                    st.session_state.paredes.pop(i)
                     st.rerun()
 
 else:
-    st.info("👆 Sube una foto de tu habitación para comenzar")
+    st.info("👆 Sube una foto de tu habitación")
 
-# Instrucciones
 st.markdown("---")
 st.markdown("""
-### 📖 ¿Cómo usar?
-1. **Sube una foto** de tu habitación
-2. **Elige un color** con el selector
-3. **Toca** en una pared de la imagen
-4. **Presiona** "PINTAR ESTA PARED"
-5. **Repite** para más paredes con diferentes colores
-6. **Compara** los resultados y encuentra tu combinación perfecta
+### 📖 Instrucciones:
+1. Sube una foto
+2. Elige un color
+3. **HAZ CLIC DIRECTAMENTE EN LA PARED**
+4. Presiona "PINTAR ESTA PARED"
+5. Repite para más paredes
 """)
                 
         
