@@ -1,138 +1,17 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
-import torch
+import google.generativeai as genai
 from streamlit_image_coordinates import streamlit_image_coordinates
-import os
-import requests
-from scipy import ndimage
 import cv2
+import io
+import base64
 
 # Configuración
-st.set_page_config(page_title="Simulador de Pintura Pro", layout="wide")
-
-def detectar_objetos_3d(imagen_np, mascara):
-    """Detecta y excluye objetos que sobresalen (ventiladores, lámparas)"""
-    gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
-    
-    # Detectar círculos (ventiladores, lámparas redondas)
-    circulos = cv2.HoughCircles(
-        gris, 
-        cv2.HOUGH_GRADIENT, 
-        dp=1, 
-        minDist=50,
-        param1=100, 
-        param2=30, 
-        minRadius=20, 
-        maxRadius=150
-    )
-    
-    mascara_limpia = mascara.copy()
-    
-    if circulos is not None:
-        circulos = np.uint16(np.around(circulos))
-        for circulo in circulos[0, :]:
-            x, y, r = circulo
-            # Crear máscara circular para excluir
-            yy, xx = np.ogrid[:imagen_np.shape[0], :imagen_np.shape[1]]
-            dist = np.sqrt((xx - x)**2 + (yy - y)**2)
-            mascara_circular = dist <= (r * 1.2)  # 20% más grande por seguridad
-            mascara_limpia = np.logical_and(mascara_limpia, ~mascara_circular)
-    
-    return mascara_limpia
-
-def expandir_a_bordes(mascara, imagen_np, punto_clic):
-    """Expande la máscara hasta los bordes reales de la pared"""
-    x, y = punto_clic
-    alto, ancho = mascara.shape
-    
-    # Obtener color de referencia
-    color_ref = imagen_np[y, x].astype(float)
-    
-    # Convertir imagen a LAB para mejor comparación
-    img_lab = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2LAB)
-    color_ref_lab = cv2.cvtColor(np.uint8([[color_ref]]), cv2.COLOR_RGB2LAB)[0, 0]
-    
-    # Calcular similitud de color
-    diferencia = np.sqrt(np.sum((img_lab - color_ref_lab) ** 2, axis=2))
-    
-    # Máscara de píxeles similares (tolerancia generosa)
-    umbral = np.percentile(diferencia[mascara], 80)
-    mascara_expandida = diferencia < (umbral * 1.8)
-    
-    # Detectar bordes arquitectónicos fuertes (techo, piso, esquinas)
-    gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
-    bordes = cv2.Canny(gris, 30, 100)
-    
-    # Dilatar bordes para crear barreras
-    kernel = np.ones((5, 5), np.uint8)
-    bordes_dilatados = cv2.dilate(bordes, kernel, iterations=2)
-    
-    # Combinar: similitud de color PERO respetar bordes fuertes
-    mascara_combinada = np.logical_and(mascara_expandida, bordes_dilatados == 0)
-    
-    # Mantener solo región conectada al punto de clic
-    etiquetas, _ = ndimage.label(mascara_combinada)
-    if etiquetas[y, x] > 0:
-        mascara_final = (etiquetas == etiquetas[y, x])
-    else:
-        mascara_final = mascara_combinada
-    
-    # Rellenar huecos internos
-    mascara_final = ndimage.binary_fill_holes(mascara_final)
-    
-    # Operación de cierre para suavizar y conectar áreas cercanas
-    estructura = np.ones((7, 7))
-    mascara_final = ndimage.binary_closing(mascara_final, structure=estructura, iterations=3)
-    
-    return mascara_final
-
-def refinar_bordes(mascara, imagen_np):
-    """Refina los bordes de la máscara para mayor precisión"""
-    # Suavizar bordes ligeramente
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mascara_uint8 = mascara.astype(np.uint8) * 255
-    
-    # Operación morfológica para suavizar
-    mascara_suavizada = cv2.morphologyEx(mascara_uint8, cv2.MORPH_CLOSE, kernel)
-    mascara_suavizada = cv2.morphologyEx(mascara_suavizada, cv2.MORPH_OPEN, kernel)
-    
-    # Aplicar filtro bilateral para bordes más naturales
-    mascara_refinada = cv2.bilateralFilter(mascara_suavizada, 9, 75, 75)
-    
-    return mascara_refinada > 127
-
-def filtrar_sombras_objetos(imagen_np, mascara, punto_clic):
-    """Distingue entre sombras de la pared y objetos reales"""
-    x, y = punto_clic
-    
-    # Convertir a espacio HSV
-    img_hsv = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2HSV)
-    
-    # Obtener valor de referencia (luminosidad)
-    v_ref = img_hsv[y, x, 2]
-    
-    # Las sombras mantienen el matiz similar pero bajan el valor
-    # Los objetos cambian el matiz
-    h_imagen = img_hsv[:, :, 0]
-    v_imagen = img_hsv[:, :, 2]
-    
-    h_ref = img_hsv[y, x, 0]
-    
-    # Diferencia de matiz (objetos diferentes)
-    diff_h = np.abs(h_imagen.astype(float) - h_ref.astype(float))
-    diff_h = np.minimum(diff_h, 180 - diff_h)  # Circular en HSV
-    
-    # Objetos tienen diferencia de matiz > 15
-    es_objeto = diff_h > 15
-    
-    # Excluir objetos de la máscara
-    mascara_sin_objetos = np.logical_and(mascara, ~es_objeto)
-    
-    return mascara_sin_objetos
+st.set_page_config(page_title="Simulador de Pintura con Gemini", layout="wide")
 
 def aplicar_color_realista(imagen_np, mascara, color_hex):
-    """Aplica color preservando iluminación y textura"""
+    """Aplica color preservando iluminación"""
     color_rgb = np.array([int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)])
     
     from PIL import Image as PILImage
@@ -142,59 +21,132 @@ def aplicar_color_realista(imagen_np, mascara, color_hex):
     color_pil = PILImage.new('RGB', (1, 1), tuple(color_rgb))
     color_hsv = np.array(color_pil.convert('HSV'))[0, 0]
     
-    # Aplicar solo matiz y saturación, mantener luminosidad
     img_hsv[mascara, 0] = color_hsv[0]
-    img_hsv[mascara, 1] = int(color_hsv[1] * 0.80)  # 80% saturación
+    img_hsv[mascara, 1] = int(color_hsv[1] * 0.85)
     
     img_resultado_pil = PILImage.fromarray(img_hsv, mode='HSV').convert('RGB')
     return np.array(img_resultado_pil)
 
-@st.cache_data
-def descargar_modelo():
-    modelo_path = "mobile_sam.pt"
-    if not os.path.exists(modelo_path):
-        url = "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt"
-        with st.spinner("⏳ Descargando modelo IA..."):
-            try:
-                response = requests.get(url, stream=True)
-                response.raise_for_status()
-                with open(modelo_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            except Exception as e:
-                st.error(f"Error: {e}")
-                return None
-    return modelo_path
-
-@st.cache_resource
-def cargar_predictor():
+def detectar_pared_con_gemini(imagen_pil, punto_clic, api_key):
+    """Usa Gemini para analizar la imagen y detectar la pared"""
     try:
-        from mobile_sam import sam_model_registry, SamPredictor
-        modelo_path = descargar_modelo()
-        if modelo_path is None:
-            return None
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        modelo = sam_model_registry["vit_t"](checkpoint=modelo_path)
-        modelo.to(device=device)
-        modelo.eval()
-        return SamPredictor(modelo)
+        x, y = punto_clic
+        
+        # Crear prompt para Gemini
+        prompt = f"""Analiza esta imagen de interior. El usuario hizo clic en las coordenadas ({x}, {y}).
+
+Identifica QUÉ es el elemento en esas coordenadas (pared, mueble, cuadro, etc.) y describe:
+1. Si es una PARED o no
+2. El color aproximado de la pared
+3. Los límites aproximados de esa pared en píxeles (izquierda, derecha, arriba, abajo)
+4. Qué objetos están SOBRE la pared pero no son parte de ella (cuadros, cables, etc.)
+
+Responde SOLO en formato JSON:
+{{
+    "es_pared": true/false,
+    "color_pared": "descripción del color",
+    "limites": {{"x1": numero, "y1": numero, "x2": numero, "y2": numero}},
+    "objetos_excluir": ["objeto1", "objeto2"]
+}}"""
+        
+        response = model.generate_content([prompt, imagen_pil])
+        
+        # Parsear respuesta de Gemini
+        import json
+        texto = response.text
+        # Extraer JSON de la respuesta
+        inicio = texto.find('{')
+        fin = texto.rfind('}') + 1
+        if inicio >= 0 and fin > inicio:
+            json_str = texto[inicio:fin]
+            resultado = json.loads(json_str)
+            return resultado
+        else:
+            return None
+            
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error con Gemini API: {e}")
         return None
+
+def crear_mascara_desde_limites(imagen_shape, limites, punto_clic, imagen_np):
+    """Crea máscara inteligente basada en los límites de Gemini"""
+    alto, ancho = imagen_shape[:2]
+    x, y = punto_clic
+    
+    # Crear máscara base con los límites
+    mascara = np.zeros((alto, ancho), dtype=bool)
+    
+    x1 = max(0, limites.get('x1', 0))
+    y1 = max(0, limites.get('y1', 0))
+    x2 = min(ancho, limites.get('x2', ancho))
+    y2 = min(alto, limites.get('y2', alto))
+    
+    # Análisis de color para refinar
+    color_ref = imagen_np[y, x].astype(float)
+    img_lab = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2LAB)
+    color_ref_lab = cv2.cvtColor(np.uint8([[color_ref]]), cv2.COLOR_RGB2LAB)[0, 0]
+    
+    diferencia = np.sqrt(np.sum((img_lab - color_ref_lab) ** 2, axis=2))
+    umbral = np.percentile(diferencia[y1:y2, x1:x2], 70)
+    
+    mascara_color = diferencia < (umbral * 1.5)
+    
+    # Combinar límites con similitud de color
+    mascara[y1:y2, x1:x2] = mascara_color[y1:y2, x1:x2]
+    
+    # Detectar y excluir bordes fuertes (objetos)
+    gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
+    bordes = cv2.Canny(gris, 40, 120)
+    kernel = np.ones((5, 5), np.uint8)
+    bordes_dilatados = cv2.dilate(bordes, kernel, iterations=2)
+    
+    mascara = np.logical_and(mascara, bordes_dilatados == 0)
+    
+    # Rellenar huecos
+    from scipy import ndimage
+    mascara = ndimage.binary_fill_holes(mascara)
+    
+    return mascara
 
 # Inicializar
 if 'paredes' not in st.session_state:
     st.session_state.paredes = []
 if 'imagen_original' not in st.session_state:
     st.session_state.imagen_original = None
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = ""
 
-st.title("🎨 Simulador de Pintura Profesional v2.0")
-st.markdown("**IA Avanzada: Detecta objetos 3D, expande a esquinas, filtra sombras**")
+st.title("🎨 Simulador de Pintura con Google Gemini")
+st.markdown("**Powered by Gemini API - Detección inteligente como Gemini**")
+
+# API Key
+with st.sidebar:
+    st.markdown("### 🔑 Configuración")
+    api_key_input = st.text_input(
+        "Google Gemini API Key",
+        value=st.session_state.api_key,
+        type="password",
+        help="Obtén tu key en: https://aistudio.google.com/app/apikey"
+    )
+    
+    if api_key_input:
+        st.session_state.api_key = api_key_input
+        st.success("✅ API Key configurada")
+    else:
+        st.warning("⚠️ Ingresa tu API Key para comenzar")
+    
+    st.markdown("---")
+    st.markdown("**💡 Cómo obtener API Key:**")
+    st.markdown("1. Ve a [Google AI Studio](https://aistudio.google.com/app/apikey)")
+    st.markdown("2. Crea una API Key")
+    st.markdown("3. Pégala arriba")
 
 archivo = st.file_uploader("📸 Sube tu foto", type=["jpg", "jpeg", "png"])
 
-if archivo:
+if archivo and st.session_state.api_key:
     img = Image.open(archivo).convert("RGB")
     
     max_size = 800
@@ -215,8 +167,7 @@ if archivo:
         color = st.color_picker("", "#8FBC8F", label_visibility="collapsed")
     
     with col2:
-        st.markdown("**Preview:**")
-        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; box-shadow: 3px 3px 10px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; margin-top:25px;"></div>', unsafe_allow_html=True)
     
     with col3:
         if st.session_state.paredes:
@@ -231,7 +182,7 @@ if archivo:
         for pared in st.session_state.paredes:
             img_resultado = aplicar_color_realista(img_resultado, pared['mask'], pared['color'])
         img_mostrar = Image.fromarray(img_resultado)
-        st.success(f"✅ {len(st.session_state.paredes)} pared(es) - Detección avanzada aplicada")
+        st.success(f"✅ {len(st.session_state.paredes)} pared(es) - Gemini AI")
     else:
         img_mostrar = img
         st.info("👇 **HAZ CLIC** en la pared")
@@ -242,52 +193,36 @@ if archivo:
         x = value["x"]
         y = value["y"]
         
-        st.success(f"📍 Clic en: ({x}, {y})")
+        st.success(f"📍 Clic: ({x}, {y})")
         
-        if st.button("🎨 PINTAR CON IA AVANZADA", type="primary"):
-            with st.spinner("🤖 Procesando con IA avanzada..."):
-                predictor = cargar_predictor()
+        if st.button("🤖 ANALIZAR CON GEMINI", type="primary"):
+            with st.spinner("🤖 Gemini analizando la imagen..."):
+                # Detectar con Gemini
+                resultado = detectar_pared_con_gemini(img, (x, y), st.session_state.api_key)
                 
-                if predictor:
-                    try:
-                        img_np = np.array(img)
-                        predictor.set_image(img_np)
-                        
-                        # Paso 1: Máscara inicial con SAM
-                        masks, scores, _ = predictor.predict(
-                            point_coords=np.array([[x, y]]),
-                            point_labels=np.array([1]),
-                            multimask_output=True,
-                        )
-                        
-                        mejor = np.argmax(scores)
-                        mascara_inicial = masks[mejor]
-                        
-                        # Paso 2: DETECTAR Y EXCLUIR OBJETOS 3D (ventiladores)
-                        mascara_sin_objetos3d = detectar_objetos_3d(img_np, mascara_inicial)
-                        
-                        # Paso 3: EXPANDIR A BORDES/ESQUINAS
-                        mascara_expandida = expandir_a_bordes(mascara_sin_objetos3d, img_np, (x, y))
-                        
-                        # Paso 4: FILTRAR SOMBRAS DE OBJETOS
-                        mascara_sin_sombras = filtrar_sombras_objetos(img_np, mascara_expandida, (x, y))
-                        
-                        # Paso 5: REFINAR BORDES
-                        mascara_final = refinar_bordes(mascara_sin_sombras, img_np)
-                        
-                        # Guardar
-                        st.session_state.paredes.append({
-                            'mask': mascara_final,
-                            'color': color
-                        })
-                        
-                        st.success(f"🎉 ¡Pared #{len(st.session_state.paredes)} procesada con IA avanzada!")
-                        st.balloons()
-                        st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error: {e}")
-                        st.exception(e)
+                if resultado and resultado.get('es_pared'):
+                    st.info(f"🎯 Gemini detectó: {resultado.get('color_pared', 'pared')}")
+                    
+                    # Crear máscara
+                    img_np = np.array(img)
+                    mascara = crear_mascara_desde_limites(
+                        img_np.shape,
+                        resultado.get('limites', {}),
+                        (x, y),
+                        img_np
+                    )
+                    
+                    # Guardar
+                    st.session_state.paredes.append({
+                        'mask': mascara,
+                        'color': color
+                    })
+                    
+                    st.success("🎉 ¡Pared pintada con Gemini AI!")
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Gemini no detectó una pared en ese punto. Intenta hacer clic en la pared directamente.")
     
     if st.session_state.paredes:
         st.markdown("---")
@@ -303,17 +238,19 @@ if archivo:
                     st.session_state.paredes.pop(i)
                     st.rerun()
 
+elif archivo and not st.session_state.api_key:
+    st.warning("⚠️ Ingresa tu API Key en la barra lateral para continuar")
 else:
     st.info("👆 Sube una foto")
 
 st.markdown("---")
 st.markdown("""
-### 🚀 Mejoras IA v2.0:
-✅ **Detección de objetos 3D** - Excluye ventiladores, lámparas circulares  
-✅ **Expansión inteligente** - Cubre hasta esquinas y bordes  
-✅ **Filtro de sombras** - Distingue sombras de objetos reales  
-✅ **Refinamiento de bordes** - Transiciones suaves y naturales  
-✅ **Un solo clic** - Como Gemini pero mejor
+### 🚀 Powered by Google Gemini
+- Gemini analiza la imagen
+- Identifica paredes vs objetos  
+- Detecta límites precisos
+- Excluye cuadros, cables, muebles automáticamente
 
-📊 **Pipeline:** SAM → Objetos 3D → Expansión → Sombras → Bordes → Resultado
+**⚡ Gratis:** 60 requests/minuto  
+**📖 Docs:** [Google AI Studio](https://ai.google.dev/)
 """)
