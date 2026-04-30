@@ -31,7 +31,7 @@ def detectar_pared_con_gemini(imagen_pil, punto_clic, api_key):
     """Usa Gemini para analizar la imagen y detectar la pared"""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro-vision')  # ← CAMBIADO AQUÍ
         
         x, y = punto_clic
         
