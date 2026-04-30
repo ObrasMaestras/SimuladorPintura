@@ -9,56 +9,127 @@ from scipy import ndimage
 import cv2
 
 # Configuración
-st.set_page_config(page_title="Simulador de Pintura", layout="wide")
+st.set_page_config(page_title="Simulador de Pintura Pro", layout="wide")
 
-def detectar_pared_inteligente(imagen_np, mascara_inicial, punto_clic):
-    """
-    Analiza la imagen para detectar SOLO la pared, excluyendo objetos
-    Similar a como lo hace Gemini
-    """
-    x, y = punto_clic
-    alto, ancho = imagen_np.shape[:2]
-    
-    # 1. Obtener color de referencia de la pared (promedio en área pequeña)
-    radio = 20
-    x1, x2 = max(0, x-radio), min(ancho, x+radio)
-    y1, y2 = max(0, y-radio), min(alto, y+radio)
-    area_referencia = imagen_np[y1:y2, x1:x2]
-    color_pared = np.mean(area_referencia, axis=(0, 1))
-    
-    # 2. Convertir a LAB para mejor comparación de color
-    img_lab = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2LAB)
-    color_pared_lab = cv2.cvtColor(np.uint8([[color_pared]]), cv2.COLOR_RGB2LAB)[0, 0]
-    
-    # 3. Calcular similitud de color en toda la imagen
-    diferencia_color = np.sqrt(np.sum((img_lab - color_pared_lab) ** 2, axis=2))
-    
-    # 4. Crear máscara de píxeles similares (tolerancia adaptativa)
-    umbral_color = np.percentile(diferencia_color[mascara_inicial], 75)
-    mascara_similar = diferencia_color < umbral_color * 1.5
-    
-    # 5. Detectar bordes fuertes (objetos como cuadros, puertas)
+def detectar_objetos_3d(imagen_np, mascara):
+    """Detecta y excluye objetos que sobresalen (ventiladores, lámparas)"""
     gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
-    bordes = cv2.Canny(gris, 50, 150)
-    bordes_dilatados = cv2.dilate(bordes, np.ones((3, 3), np.uint8), iterations=2)
     
-    # 6. Combinar: píxeles similares en color PERO excluir bordes fuertes
-    mascara_pared = np.logical_and(mascara_similar, bordes_dilatados == 0)
+    # Detectar círculos (ventiladores, lámparas redondas)
+    circulos = cv2.HoughCircles(
+        gris, 
+        cv2.HOUGH_GRADIENT, 
+        dp=1, 
+        minDist=50,
+        param1=100, 
+        param2=30, 
+        minRadius=20, 
+        maxRadius=150
+    )
     
-    # 7. Mantener solo la región conectada donde hiciste clic
-    etiquetas, num_regiones = ndimage.label(mascara_pared)
-    if 0 <= y < alto and 0 <= x < ancho:
-        etiqueta_clic = etiquetas[y, x]
-        if etiqueta_clic > 0:
-            mascara_pared = (etiquetas == etiqueta_clic)
+    mascara_limpia = mascara.copy()
     
-    # 8. Rellenar huecos internos
-    mascara_pared = ndimage.binary_fill_holes(mascara_pared)
+    if circulos is not None:
+        circulos = np.uint16(np.around(circulos))
+        for circulo in circulos[0, :]:
+            x, y, r = circulo
+            # Crear máscara circular para excluir
+            yy, xx = np.ogrid[:imagen_np.shape[0], :imagen_np.shape[1]]
+            dist = np.sqrt((xx - x)**2 + (yy - y)**2)
+            mascara_circular = dist <= (r * 1.2)  # 20% más grande por seguridad
+            mascara_limpia = np.logical_and(mascara_limpia, ~mascara_circular)
     
-    # 9. Suavizar bordes ligeramente
-    mascara_pared = ndimage.binary_closing(mascara_pared, structure=np.ones((3, 3)), iterations=2)
+    return mascara_limpia
+
+def expandir_a_bordes(mascara, imagen_np, punto_clic):
+    """Expande la máscara hasta los bordes reales de la pared"""
+    x, y = punto_clic
+    alto, ancho = mascara.shape
     
-    return mascara_pared
+    # Obtener color de referencia
+    color_ref = imagen_np[y, x].astype(float)
+    
+    # Convertir imagen a LAB para mejor comparación
+    img_lab = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2LAB)
+    color_ref_lab = cv2.cvtColor(np.uint8([[color_ref]]), cv2.COLOR_RGB2LAB)[0, 0]
+    
+    # Calcular similitud de color
+    diferencia = np.sqrt(np.sum((img_lab - color_ref_lab) ** 2, axis=2))
+    
+    # Máscara de píxeles similares (tolerancia generosa)
+    umbral = np.percentile(diferencia[mascara], 80)
+    mascara_expandida = diferencia < (umbral * 1.8)
+    
+    # Detectar bordes arquitectónicos fuertes (techo, piso, esquinas)
+    gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
+    bordes = cv2.Canny(gris, 30, 100)
+    
+    # Dilatar bordes para crear barreras
+    kernel = np.ones((5, 5), np.uint8)
+    bordes_dilatados = cv2.dilate(bordes, kernel, iterations=2)
+    
+    # Combinar: similitud de color PERO respetar bordes fuertes
+    mascara_combinada = np.logical_and(mascara_expandida, bordes_dilatados == 0)
+    
+    # Mantener solo región conectada al punto de clic
+    etiquetas, _ = ndimage.label(mascara_combinada)
+    if etiquetas[y, x] > 0:
+        mascara_final = (etiquetas == etiquetas[y, x])
+    else:
+        mascara_final = mascara_combinada
+    
+    # Rellenar huecos internos
+    mascara_final = ndimage.binary_fill_holes(mascara_final)
+    
+    # Operación de cierre para suavizar y conectar áreas cercanas
+    estructura = np.ones((7, 7))
+    mascara_final = ndimage.binary_closing(mascara_final, structure=estructura, iterations=3)
+    
+    return mascara_final
+
+def refinar_bordes(mascara, imagen_np):
+    """Refina los bordes de la máscara para mayor precisión"""
+    # Suavizar bordes ligeramente
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mascara_uint8 = mascara.astype(np.uint8) * 255
+    
+    # Operación morfológica para suavizar
+    mascara_suavizada = cv2.morphologyEx(mascara_uint8, cv2.MORPH_CLOSE, kernel)
+    mascara_suavizada = cv2.morphologyEx(mascara_suavizada, cv2.MORPH_OPEN, kernel)
+    
+    # Aplicar filtro bilateral para bordes más naturales
+    mascara_refinada = cv2.bilateralFilter(mascara_suavizada, 9, 75, 75)
+    
+    return mascara_refinada > 127
+
+def filtrar_sombras_objetos(imagen_np, mascara, punto_clic):
+    """Distingue entre sombras de la pared y objetos reales"""
+    x, y = punto_clic
+    
+    # Convertir a espacio HSV
+    img_hsv = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2HSV)
+    
+    # Obtener valor de referencia (luminosidad)
+    v_ref = img_hsv[y, x, 2]
+    
+    # Las sombras mantienen el matiz similar pero bajan el valor
+    # Los objetos cambian el matiz
+    h_imagen = img_hsv[:, :, 0]
+    v_imagen = img_hsv[:, :, 2]
+    
+    h_ref = img_hsv[y, x, 0]
+    
+    # Diferencia de matiz (objetos diferentes)
+    diff_h = np.abs(h_imagen.astype(float) - h_ref.astype(float))
+    diff_h = np.minimum(diff_h, 180 - diff_h)  # Circular en HSV
+    
+    # Objetos tienen diferencia de matiz > 15
+    es_objeto = diff_h > 15
+    
+    # Excluir objetos de la máscara
+    mascara_sin_objetos = np.logical_and(mascara, ~es_objeto)
+    
+    return mascara_sin_objetos
 
 def aplicar_color_realista(imagen_np, mascara, color_hex):
     """Aplica color preservando iluminación y textura"""
@@ -71,9 +142,9 @@ def aplicar_color_realista(imagen_np, mascara, color_hex):
     color_pil = PILImage.new('RGB', (1, 1), tuple(color_rgb))
     color_hsv = np.array(color_pil.convert('HSV'))[0, 0]
     
-    # Aplicar color manteniendo luminosidad original
-    img_hsv[mascara, 0] = color_hsv[0]  # Hue
-    img_hsv[mascara, 1] = int(color_hsv[1] * 0.85)  # Saturación reducida para naturalidad
+    # Aplicar solo matiz y saturación, mantener luminosidad
+    img_hsv[mascara, 0] = color_hsv[0]
+    img_hsv[mascara, 1] = int(color_hsv[1] * 0.80)  # 80% saturación
     
     img_resultado_pil = PILImage.fromarray(img_hsv, mode='HSV').convert('RGB')
     return np.array(img_resultado_pil)
@@ -118,8 +189,8 @@ if 'paredes' not in st.session_state:
 if 'imagen_original' not in st.session_state:
     st.session_state.imagen_original = None
 
-st.title("🎨 Simulador de Pintura con IA Avanzada")
-st.markdown("**Un solo clic - La IA detecta automáticamente toda la pared**")
+st.title("🎨 Simulador de Pintura Profesional v2.0")
+st.markdown("**IA Avanzada: Detecta objetos 3D, expande a esquinas, filtra sombras**")
 
 archivo = st.file_uploader("📸 Sube tu foto", type=["jpg", "jpeg", "png"])
 
@@ -140,16 +211,16 @@ if archivo:
     col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        st.markdown("**🎨 Elige tu color:**")
+        st.markdown("**🎨 Color:**")
         color = st.color_picker("", "#8FBC8F", label_visibility="collapsed")
     
     with col2:
-        st.markdown("**Vista previa:**")
-        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; box-shadow: 2px 2px 8px rgba(0,0,0,0.2);"></div>', unsafe_allow_html=True)
+        st.markdown("**Preview:**")
+        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; box-shadow: 3px 3px 10px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
     
     with col3:
         if st.session_state.paredes:
-            if st.button("🗑️ Borrar"):
+            if st.button("🗑️"):
                 st.session_state.paredes = []
                 st.rerun()
     
@@ -160,10 +231,10 @@ if archivo:
         for pared in st.session_state.paredes:
             img_resultado = aplicar_color_realista(img_resultado, pared['mask'], pared['color'])
         img_mostrar = Image.fromarray(img_resultado)
-        st.success(f"✅ {len(st.session_state.paredes)} pared(es) pintada(s) con IA avanzada")
+        st.success(f"✅ {len(st.session_state.paredes)} pared(es) - Detección avanzada aplicada")
     else:
         img_mostrar = img
-        st.info("👇 **HAZ UN CLIC** en cualquier parte de la pared")
+        st.info("👇 **HAZ CLIC** en la pared")
     
     value = streamlit_image_coordinates(img_mostrar, key="image_coords")
     
@@ -171,10 +242,10 @@ if archivo:
         x = value["x"]
         y = value["y"]
         
-        st.success(f"📍 Punto seleccionado: ({x}, {y})")
+        st.success(f"📍 Clic en: ({x}, {y})")
         
-        if st.button("🎨 PINTAR ESTA PARED", type="primary"):
-            with st.spinner("🤖 Analizando pared con IA avanzada..."):
+        if st.button("🎨 PINTAR CON IA AVANZADA", type="primary"):
+            with st.spinner("🤖 Procesando con IA avanzada..."):
                 predictor = cargar_predictor()
                 
                 if predictor:
@@ -182,31 +253,35 @@ if archivo:
                         img_np = np.array(img)
                         predictor.set_image(img_np)
                         
-                        # Obtener máscara inicial con SAM
+                        # Paso 1: Máscara inicial con SAM
                         masks, scores, _ = predictor.predict(
                             point_coords=np.array([[x, y]]),
                             point_labels=np.array([1]),
                             multimask_output=True,
                         )
                         
-                        # Usar la mejor máscara inicial
                         mejor = np.argmax(scores)
                         mascara_inicial = masks[mejor]
                         
-                        # ANÁLISIS INTELIGENTE: Detectar solo la pared
-                        mascara_pared = detectar_pared_inteligente(
-                            img_np, 
-                            mascara_inicial, 
-                            (x, y)
-                        )
+                        # Paso 2: DETECTAR Y EXCLUIR OBJETOS 3D (ventiladores)
+                        mascara_sin_objetos3d = detectar_objetos_3d(img_np, mascara_inicial)
+                        
+                        # Paso 3: EXPANDIR A BORDES/ESQUINAS
+                        mascara_expandida = expandir_a_bordes(mascara_sin_objetos3d, img_np, (x, y))
+                        
+                        # Paso 4: FILTRAR SOMBRAS DE OBJETOS
+                        mascara_sin_sombras = filtrar_sombras_objetos(img_np, mascara_expandida, (x, y))
+                        
+                        # Paso 5: REFINAR BORDES
+                        mascara_final = refinar_bordes(mascara_sin_sombras, img_np)
                         
                         # Guardar
                         st.session_state.paredes.append({
-                            'mask': mascara_pared,
+                            'mask': mascara_final,
                             'color': color
                         })
                         
-                        st.success(f"🎉 ¡Pared #{len(st.session_state.paredes)} pintada con IA!")
+                        st.success(f"🎉 ¡Pared #{len(st.session_state.paredes)} procesada con IA avanzada!")
                         st.balloons()
                         st.rerun()
                         
@@ -216,11 +291,11 @@ if archivo:
     
     if st.session_state.paredes:
         st.markdown("---")
-        st.markdown("### 📋 Paredes Pintadas:")
+        st.markdown("### 📋 Paredes:")
         for i, p in enumerate(st.session_state.paredes):
             col_a, col_b, col_c = st.columns([1, 3, 1])
             with col_a:
-                st.markdown(f"**Pared {i+1}**")
+                st.markdown(f"**{i+1}**")
             with col_b:
                 st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:8px; border:2px solid #000;"></div>', unsafe_allow_html=True)
             with col_c:
@@ -229,21 +304,16 @@ if archivo:
                     st.rerun()
 
 else:
-    st.info("👆 Sube una foto de tu habitación")
+    st.info("👆 Sube una foto")
 
 st.markdown("---")
 st.markdown("""
-### 📖 Cómo funciona la IA:
-1. **Sube** una foto bien iluminada
-2. **Elige** el color que quieres probar
-3. **Haz UN CLIC** en la pared
-4. **La IA analiza:**
-   - ✅ Color y textura de la pared
-   - ✅ Detecta bordes de objetos (cuadros, puertas)
-   - ✅ Excluye automáticamente cables, muebles, cuadros
-   - ✅ Pinta detrás de obstáculos (sillas, cables)
-   - ✅ Rellena huecos y sombras
-5. **Resultado** realista como Gemini - Un solo clic
+### 🚀 Mejoras IA v2.0:
+✅ **Detección de objetos 3D** - Excluye ventiladores, lámparas circulares  
+✅ **Expansión inteligente** - Cubre hasta esquinas y bordes  
+✅ **Filtro de sombras** - Distingue sombras de objetos reales  
+✅ **Refinamiento de bordes** - Transiciones suaves y naturales  
+✅ **Un solo clic** - Como Gemini pero mejor
 
-💡 **Tecnología:** Análisis de color LAB + Detección de bordes + Segmentación inteligente
+📊 **Pipeline:** SAM → Objetos 3D → Expansión → Sombras → Bordes → Resultado
 """)
