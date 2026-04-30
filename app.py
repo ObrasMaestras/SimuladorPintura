@@ -10,18 +10,16 @@ from scipy import ndimage
 # Configuración
 st.set_page_config(page_title="Simulador de Pintura", layout="wide")
 
-# Función para mejorar la máscara (rellenar huecos y limpiar bordes)
+# Función MEJORADA para rellenar solo huecos pequeños SIN expandir
 def mejorar_mascara(mascara):
-    """Rellena huecos pequeños y suaviza bordes"""
-    # Rellenar huecos pequeños (hasta 50 píxeles)
+    """Rellena solo huecos internos pequeños, NO expande bordes"""
+    # Solo rellenar huecos completamente rodeados (binary_fill_holes)
     mascara_mejorada = ndimage.binary_fill_holes(mascara)
     
-    # Operación de cierre para conectar áreas cercanas
-    estructura = ndimage.generate_binary_structure(2, 2)
-    mascara_mejorada = ndimage.binary_closing(mascara_mejorada, structure=estructura, iterations=3)
-    
-    # Pequeña dilatación para cubrir bordes mejor
-    mascara_mejorada = ndimage.binary_dilation(mascara_mejorada, structure=estructura, iterations=2)
+    # NO hacer dilatación para evitar pintar objetos cercanos
+    # Solo una pequeña operación de cierre para suavizar bordes internos
+    estructura = np.ones((3, 3))
+    mascara_mejorada = ndimage.binary_closing(mascara_mejorada, structure=estructura, iterations=1)
     
     return mascara_mejorada
 
@@ -39,7 +37,7 @@ def aplicar_color_realista(imagen_np, mascara, color_hex):
     
     # Aplicar solo matiz y saturación, mantener luminosidad
     img_hsv[mascara, 0] = color_hsv[0]
-    img_hsv[mascara, 1] = color_hsv[1]
+    img_hsv[mascara, 1] = int(color_hsv[1] * 0.9)  # 90% saturación para más natural
     
     img_resultado_pil = PILImage.fromarray(img_hsv, mode='HSV').convert('RGB')
     return np.array(img_resultado_pil)
@@ -116,32 +114,31 @@ if archivo:
     col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
     
     with col1:
-        st.markdown("**🎨 Elige tu color:**")
+        st.markdown("**🎨 Color:**")
         color = st.color_picker("", "#8FBC8F", label_visibility="collapsed")
     
     with col2:
-        st.markdown("**Vista previa:**")
+        st.markdown("**Preview:**")
         st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333;"></div>', unsafe_allow_html=True)
     
     with col3:
-        # Modo pintar / borrar
-        if st.button("🖌️ Pintar" if st.session_state.modo == 'borrar' else "🧹 Borrar"):
+        if st.button("🖌️" if st.session_state.modo == 'borrar' else "🧹"):
             st.session_state.modo = 'borrar' if st.session_state.modo == 'pintar' else 'pintar'
             st.rerun()
     
     with col4:
         if st.session_state.paredes:
-            if st.button("🗑️ Todo"):
+            if st.button("🗑️"):
                 st.session_state.paredes = []
                 st.rerun()
     
     # Indicador de modo
     if st.session_state.modo == 'borrar':
-        st.warning("🧹 **MODO BORRADOR** - Haz clic en áreas para quitar pintura")
+        st.warning("🧹 **BORRADOR** - Clic para quitar pintura")
     else:
-        st.info("🖌️ **MODO PINTAR** - Haz clic en paredes para pintarlas")
+        st.info("🖌️ **PINTAR** - Clic en la pared que quieres pintar")
     
-    # Mostrar resultado actual
+    # Mostrar resultado
     st.markdown("---")
     if st.session_state.paredes:
         img_resultado = st.session_state.imagen_original.copy()
@@ -150,27 +147,23 @@ if archivo:
             img_resultado = aplicar_color_realista(img_resultado, pared['mask'], pared['color'])
         
         img_mostrar = Image.fromarray(img_resultado)
-        st.markdown(f"**✅ {len(st.session_state.paredes)} pared(es) pintada(s)**")
+        st.markdown(f"**✅ {len(st.session_state.paredes)} pared(es)**")
     else:
         img_mostrar = img
-        st.markdown("**👇 HAZ CLIC EN LA PARED:**")
     
-    # Capturar clic en la imagen
-    value = streamlit_image_coordinates(
-        img_mostrar,
-        key="image_coords"
-    )
+    # Capturar clic
+    value = streamlit_image_coordinates(img_mostrar, key="image_coords")
     
     # Procesar clic
     if value is not None:
         x = value["x"]
         y = value["y"]
         
-        st.success(f"📍 Clic en: ({x}, {y})")
+        st.success(f"📍 ({x}, {y})")
         
         if st.session_state.modo == 'pintar':
-            if st.button("🎨 PINTAR ESTA PARED", type="primary"):
-                with st.spinner("🤖 Detectando pared..."):
+            if st.button("🎨 PINTAR", type="primary"):
+                with st.spinner("🤖 Detectando..."):
                     predictor = cargar_predictor()
                     
                     if predictor:
@@ -178,17 +171,19 @@ if archivo:
                             img_np = np.array(img)
                             predictor.set_image(img_np)
                             
+                            # Generar 3 máscaras y elegir la más grande (usualmente la pared completa)
                             masks, scores, _ = predictor.predict(
                                 point_coords=np.array([[x, y]]),
                                 point_labels=np.array([1]),
                                 multimask_output=True,
                             )
                             
-                            # Mejor máscara
-                            mejor = np.argmax(scores)
+                            # Elegir la máscara MÁS GRANDE (paredes son grandes)
+                            tamaños = [mask.sum() for mask in masks]
+                            mejor = np.argmax(tamaños)
                             mask = masks[mejor]
                             
-                            # MEJORAR LA MÁSCARA (rellenar huecos)
+                            # Mejorar máscara (solo rellenar huecos internos)
                             mask_mejorada = mejorar_mascara(mask)
                             
                             # Guardar
@@ -197,52 +192,48 @@ if archivo:
                                 'color': color
                             })
                             
-                            st.success(f"✅ Pared {len(st.session_state.paredes)} pintada!")
+                            st.success(f"✅ Pintada!")
                             st.balloons()
                             st.rerun()
                             
                         except Exception as e:
                             st.error(f"Error: {e}")
         
-        else:  # Modo borrar
-            if st.button("🧹 QUITAR PINTURA AQUÍ", type="secondary"):
-                # Buscar qué pared contiene este punto y eliminarla
+        else:  # Borrar
+            if st.button("🧹 QUITAR", type="secondary"):
                 for i, pared in enumerate(st.session_state.paredes):
                     if pared['mask'][y, x]:
                         st.session_state.paredes.pop(i)
-                        st.success(f"✅ Área borrada!")
+                        st.success(f"✅ Borrado!")
                         st.rerun()
                         break
-                else:
-                    st.warning("⚠️ No hay pintura en ese punto")
     
-    # Lista de paredes
+    # Lista
     if st.session_state.paredes:
         st.markdown("---")
-        st.markdown("### 📋 Paredes Pintadas:")
+        st.markdown("### 📋 Paredes:")
         for i, p in enumerate(st.session_state.paredes):
             col_a, col_b, col_c = st.columns([1, 3, 1])
             with col_a:
-                st.markdown(f"**#{i+1}**")
+                st.markdown(f"**{i+1}**")
             with col_b:
-                st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:5px; border:2px solid black;"></div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:5px; border:2px solid #000;"></div>', unsafe_allow_html=True)
             with col_c:
-                if st.button("❌", key=f"del{i}"):
+                if st.button("❌", key=f"d{i}"):
                     st.session_state.paredes.pop(i)
                     st.rerun()
 
 else:
-    st.info("👆 Sube una foto de tu habitación")
+    st.info("👆 Sube una foto")
 
 st.markdown("---")
 st.markdown("""
-### 📖 Cómo usar:
-1. **Sube una foto** bien iluminada
-2. **Elige un color**
-3. **Haz clic** en la pared
-4. **Presiona** "PINTAR ESTA PARED"
-5. **Modo borrador** para quitar áreas incorrectas
-6. **Repite** para más paredes
+### 📖 Uso:
+1. Sube foto
+2. Elige color
+3. Clic en pared
+4. "PINTAR"
+5. Usa 🧹 para borrar errores
 
-💡 **Mejoras:** Rellena huecos automáticamente y modo borrador para correcciones
+💡 Ahora detecta la máscara más grande = pared completa
 """)
