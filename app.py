@@ -9,13 +9,37 @@ import requests
 # Configuración
 st.set_page_config(page_title="Simulador de Pintura", layout="wide")
 
+# Función para aplicar color REALISTA preservando sombras
+def aplicar_color_realista(imagen_np, mascara, color_hex):
+    """Aplica color preservando la iluminación y sombras originales"""
+    # Convertir hex a RGB
+    color_rgb = np.array([int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)])
+    
+    # Convertir imagen a HSV para preservar luminosidad
+    from PIL import Image as PILImage
+    img_pil = PILImage.fromarray(imagen_np)
+    img_hsv = np.array(img_pil.convert('HSV'))
+    
+    # Convertir color objetivo a HSV
+    color_pil = PILImage.new('RGB', (1, 1), tuple(color_rgb))
+    color_hsv = np.array(color_pil.convert('HSV'))[0, 0]
+    
+    # Aplicar solo matiz y saturación, mantener luminosidad original
+    img_hsv[mascara, 0] = color_hsv[0]  # Hue (matiz)
+    img_hsv[mascara, 1] = color_hsv[1]  # Saturation (saturación)
+    # img_hsv[mascara, 2] se mantiene = luminosidad original
+    
+    # Convertir de vuelta a RGB
+    img_resultado_pil = PILImage.fromarray(img_hsv, mode='HSV').convert('RGB')
+    return np.array(img_resultado_pil)
+
 # Función para descargar el modelo
 @st.cache_data
 def descargar_modelo():
     modelo_path = "mobile_sam.pt"
     if not os.path.exists(modelo_path):
         url = "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt"
-        with st.spinner("⏳ Descargando cerebro de la IA (esto solo pasa una vez)..."):
+        with st.spinner("⏳ Descargando modelo..."):
             try:
                 response = requests.get(url, stream=True)
                 response.raise_for_status()
@@ -52,81 +76,83 @@ if 'imagen_original' not in st.session_state:
     st.session_state.imagen_original = None
 
 # Título
-st.title("🎨 Simulador de Pintura Realista")
+st.title("🎨 Simulador de Pintura Profesional")
+st.markdown("**Visualiza colores realistas en tus paredes**")
 
 # Subir foto
 archivo = st.file_uploader("📸 Sube tu foto", type=["jpg", "jpeg", "png"])
 
 if archivo:
     # Cargar imagen
-    img_pil = Image.open(archivo).convert("RGB")
+    img = Image.open(archivo).convert("RGB")
     
     # Redimensionar
     max_size = 800
-    if max(img_pil.size) > max_size:
-        ratio = max_size / max(img_pil.size)
-        nuevo_w = int(img_pil.size[0] * ratio)
-        nuevo_h = int(img_pil.size[1] * ratio)
-        img_pil = img_pil.resize((nuevo_w, nuevo_h), Image.Resampling.LANCZOS)
+    if max(img.size) > max_size:
+        ratio = max_size / max(img.size)
+        nuevo_w = int(img.size[0] * ratio)
+        nuevo_h = int(img.size[1] * ratio)
+        img = img.resize((nuevo_w, nuevo_h), Image.Resampling.LANCZOS)
     
-    # Guardar original en formato numpy para procesar
+    # Guardar original
     if st.session_state.imagen_original is None:
-        st.session_state.imagen_original = np.array(img_pil)
+        st.session_state.imagen_original = np.array(img)
     
     # Selector de color
     st.markdown("---")
-    col1, col2 = st.columns([1, 3])
+    col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        color_elegido = st.color_picker("Elige el color de pintura:", "#FF6B6B")
+        st.markdown("**🎨 Elige tu color:**")
+        color = st.color_picker("", "#8FBC8F", label_visibility="collapsed")
     
     with col2:
+        # Mostrar preview del color
+        st.markdown("**Vista previa:**")
+        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; box-shadow:2px 2px 5px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
+    
+    with col3:
         if st.session_state.paredes:
-            if st.button("🗑️ BORRAR TODO"):
+            if st.button("🗑️ Borrar"):
                 st.session_state.paredes = []
                 st.rerun()
     
-    # --- PROCESO DE PINTURA REALISTA ---
-    img_resultado = st.session_state.imagen_original.copy().astype(float)
-    
+    # Mostrar resultado actual
+    st.markdown("---")
     if st.session_state.paredes:
+        img_resultado = st.session_state.imagen_original.copy()
+        
+        # Aplicar cada pared con color realista
         for pared in st.session_state.paredes:
-            # Convertir HEX a RGB
-            hex_color = pared['color'].lstrip('#')
-            rgb_nuevo = np.array([int(hex_color[i:i+2], 16) for i in (0, 2, 4)])
-            
-            # MÁSCARA: Donde está la pared seleccionada
-            mask = pared['mask']
-            
-            # FÓRMULA DE REALISMO (Alpha Blending)
-            # Mezclamos el 40% del color nuevo con el 60% de la textura original
-            img_resultado[mask] = (img_resultado[mask] * 0.6) + (rgb_nuevo * 0.4)
-            
-        img_final = Image.fromarray(img_resultado.astype(np.uint8))
-        st.markdown(f"**✅ {len(st.session_state.paredes)} pared(es) pintada(s) con realismo**")
+            img_resultado = aplicar_color_realista(img_resultado, pared['mask'], pared['color'])
+        
+        img_mostrar = Image.fromarray(img_resultado)
+        st.markdown(f"**✅ {len(st.session_state.paredes)} pared(es) pintada(s) - Vista REALISTA**")
     else:
-        img_final = img_pil
+        img_mostrar = img
         st.markdown("**👇 HAZ CLIC EN LA PARED QUE QUIERES PINTAR:**")
     
     # Capturar clic en la imagen
     value = streamlit_image_coordinates(
-        img_final,
+        img_mostrar,
         key="image_coords"
     )
     
     # Procesar clic
     if value is not None:
-        x, y = value["x"], value["y"]
-        st.success(f"📍 Punto marcado: ({x}, {y})")
+        x = value["x"]
+        y = value["y"]
         
-        if st.button("🎨 PINTAR ESTA PARED", type="primary", use_container_width=True):
-            with st.spinner("🤖 La IA está analizando la textura de la pared..."):
+        st.success(f"📍 Punto seleccionado: ({x}, {y})")
+        
+        if st.button("🎨 PINTAR ESTA PARED", type="primary"):
+            with st.spinner("🤖 Detectando pared con IA..."):
                 predictor = cargar_predictor()
                 
                 if predictor:
                     try:
-                        # Usar la imagen original para que la IA no se confunda con colores previos
-                        predictor.set_image(st.session_state.imagen_original)
+                        img_np = np.array(img)
+                        predictor.set_image(img_np)
                         
                         masks, scores, _ = predictor.predict(
                             point_coords=np.array([[x, y]]),
@@ -134,39 +160,52 @@ if archivo:
                             multimask_output=True,
                         )
                         
-                        # Seleccionar la máscara con mejor puntuación
-                        mask = masks[np.argmax(scores)]
+                        # Mejor máscara
+                        mejor = np.argmax(scores)
+                        mask = masks[mejor]
                         
-                        # Guardar en la lista
+                        # Guardar
                         st.session_state.paredes.append({
                             'mask': mask,
-                            'color': color_elegido
+                            'color': color
                         })
                         
+                        st.success(f"✅ Pared {len(st.session_state.paredes)} pintada!")
                         st.balloons()
                         st.rerun()
                         
                     except Exception as e:
-                        st.error(f"Error técnico: {e}")
+                        st.error(f"Error: {e}")
     
-    # Lista de historial de paredes
+    # Lista de paredes
     if st.session_state.paredes:
         st.markdown("---")
-        st.markdown("### 📋 Capas de pintura aplicadas:")
+        st.markdown("### 📋 Paredes Pintadas:")
         for i, p in enumerate(st.session_state.paredes):
-            col_a, col_b = st.columns([5, 1])
+            col_a, col_b, col_c = st.columns([1, 3, 1])
             with col_a:
-                st.markdown(f'<div style="background:{p["color"]}; height:35px; border-radius:5px; border:1px solid #ccc;"></div>', unsafe_allow_html=True)
+                st.markdown(f"**#{i+1}**")
             with col_b:
-                if st.button("Eliminar", key=f"del{i}"):
+                st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:5px; border:2px solid black;"></div>', unsafe_allow_html=True)
+            with col_c:
+                if st.button("❌", key=f"del{i}"):
                     st.session_state.paredes.pop(i)
                     st.rerun()
 
 else:
-    st.info("👆 Por favor, sube una foto para comenzar el simulador.")
+    st.info("👆 Sube una foto de tu habitación")
+    st.markdown("**💡 Ejemplo:** Sube una foto bien iluminada de tu espacio para mejores resultados")
 
 st.markdown("---")
-st.caption("Desarrollado con MobileSAM IA para un acabado profesional.")
+st.markdown("""
+### 📖 Cómo usar:
+1. **Sube una foto** de tu habitación bien iluminada
+2. **Elige un color** que te guste
+3. **Haz clic** directamente en la pared que quieres pintar
+4. **Presiona** "PINTAR ESTA PARED"
+5. **Repite** para probar diferentes colores en otras paredes
+6. **Compara** y elige la combinación perfecta
+
+💡 **Tip:** El color se aplica preservando las sombras naturales para un resultado realista
+""")
                 
-        
-        
