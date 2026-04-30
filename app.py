@@ -10,19 +10,38 @@ from scipy import ndimage
 
 st.set_page_config(page_title="Simulador de Pintura", layout="wide")
 
+def aplicar_color_directo(imagen_np, mascara, color_hex, intensidad=0.6):
+    """
+    Aplica color de forma DIRECTA con blend simple
+    Garantiza que el color se vea
+    """
+    # Convertir hex a RGB
+    color_rgb = np.array([int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)])
+    
+    # Crear copia de la imagen
+    resultado = imagen_np.copy().astype(float)
+    
+    # BLEND DIRECTO: mezclar color con imagen original
+    # Formula: resultado = original * (1 - intensidad) + color * intensidad
+    for canal in range(3):
+        resultado[mascara, canal] = (
+            imagen_np[mascara, canal] * (1 - intensidad) +
+            color_rgb[canal] * intensidad
+        )
+    
+    return resultado.astype(np.uint8)
+
 def mejorar_mascara_simple(mascara_sam, imagen_np):
-    """
-    Mejora la máscara de forma SIMPLE pero efectiva
-    """
-    # 1. Rellenar huecos internos
+    """Mejora la máscara de forma simple"""
+    # 1. Rellenar huecos
     mascara = ndimage.binary_fill_holes(mascara_sam)
     
-    # 2. Suavizar y expandir ligeramente
+    # 2. Expandir y suavizar
     estructura = np.ones((7, 7))
     mascara = ndimage.binary_closing(mascara, structure=estructura, iterations=4)
     mascara = ndimage.binary_dilation(mascara, structure=np.ones((5, 5)), iterations=2)
     
-    # 3. Detectar y excluir SOLO círculos grandes (ventilador)
+    # 3. Excluir círculos grandes (ventilador)
     gris = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2GRAY)
     circulos = cv2.HoughCircles(
         gris, cv2.HOUGH_GRADIENT, dp=1, minDist=100,
@@ -39,20 +58,6 @@ def mejorar_mascara_simple(mascara_sam, imagen_np):
             mascara = np.logical_and(mascara, ~circulo_mask)
     
     return mascara
-
-def aplicar_color_realista(imagen_np, mascara, color_hex, intensidad=0.6):
-    """Aplica color preservando luminosidad"""
-    color_rgb = np.array([int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)])
-    
-    img_hsv = cv2.cvtColor(imagen_np, cv2.COLOR_RGB2HSV).astype(float)
-    color_hsv = cv2.cvtColor(np.uint8([[color_rgb]]), cv2.COLOR_RGB2HSV)[0, 0].astype(float)
-    
-    img_resultado = img_hsv.copy()
-    img_resultado[mascara, 0] = color_hsv[0]
-    img_resultado[mascara, 1] = color_hsv[1] * intensidad + img_hsv[mascara, 1] * (1 - intensidad)
-    
-    img_resultado = img_resultado.astype(np.uint8)
-    return cv2.cvtColor(img_resultado, cv2.COLOR_HSV2RGB)
 
 @st.cache_data
 def descargar_modelo():
@@ -95,11 +100,14 @@ if 'imagen_original' not in st.session_state:
     st.session_state.imagen_original = None
 
 st.title("🎨 Simulador de Pintura")
-st.markdown("**Versión simplificada y funcional**")
+st.markdown("**Aplicación de color directa y visible**")
 
 st.markdown("---")
-intensidad = st.slider("💧 Intensidad del color", 0.3, 1.0, 0.6, 0.05,
-                       help="Controla la intensidad del color aplicado")
+col_int, col_info = st.columns([1, 2])
+with col_int:
+    intensidad = st.slider("💧 Intensidad", 0.3, 1.0, 0.7, 0.05)
+with col_info:
+    st.info(f"✨ Intensidad: {int(intensidad*100)}% - Más alto = color más fuerte")
 
 archivo = st.file_uploader("📸 Sube tu foto", type=["jpg", "jpeg", "png"])
 
@@ -121,44 +129,49 @@ if archivo:
     
     with col1:
         st.markdown("**🎨 Elige tu color:**")
-        color = st.color_picker("", "#8FBC8F", label_visibility="collapsed")
+        color = st.color_picker("", "#4CAF50", label_visibility="collapsed")
     
     with col2:
-        st.markdown("**Vista previa:**")
-        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; margin-top:8px; box-shadow:2px 2px 8px rgba(0,0,0,0.2);"></div>', unsafe_allow_html=True)
+        st.markdown("**Preview del color:**")
+        st.markdown(f'<div style="background:{color}; height:50px; border-radius:10px; border:3px solid #333; margin-top:8px; box-shadow:3px 3px 10px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
     
     with col3:
         if st.session_state.paredes:
-            if st.button("🗑️ Borrar"):
+            if st.button("🗑️"):
                 st.session_state.paredes = []
                 st.rerun()
     
     st.markdown("---")
     
+    # Mostrar resultado
     if st.session_state.paredes:
         img_resultado = st.session_state.imagen_original.copy()
+        
+        # Aplicar cada pared
         for pared in st.session_state.paredes:
-            img_resultado = aplicar_color_realista(
+            img_resultado = aplicar_color_directo(
                 img_resultado, 
                 pared['mask'], 
                 pared['color'],
                 pared['intensidad']
             )
+        
         img_mostrar = Image.fromarray(img_resultado)
-        st.success(f"✅ {len(st.session_state.paredes)} pared(es) pintada(s)")
+        st.success(f"✅ {len(st.session_state.paredes)} pared(es) pintada(s) con color visible")
     else:
         img_mostrar = img
-        st.info("👇 **HAZ CLIC** en la pared que quieres pintar")
+        st.info("👇 **HAZ CLIC** en la pared")
     
+    # Capturar clic
     value = streamlit_image_coordinates(img_mostrar, key="image_coords")
     
     if value is not None:
         x = value["x"]
         y = value["y"]
         
-        st.success(f"📍 Punto seleccionado: ({x}, {y})")
+        st.success(f"📍 Clic en: ({x}, {y})")
         
-        if st.button("🎨 PINTAR ESTA PARED", type="primary"):
+        if st.button("🎨 PINTAR PARED", type="primary"):
             with st.spinner("🤖 Detectando pared..."):
                 predictor = cargar_predictor()
                 
@@ -167,18 +180,18 @@ if archivo:
                         img_np = np.array(img)
                         predictor.set_image(img_np)
                         
-                        # Generar máscaras con SAM
+                        # Generar máscaras
                         masks, scores, _ = predictor.predict(
                             point_coords=np.array([[x, y]]),
                             point_labels=np.array([1]),
                             multimask_output=True,
                         )
                         
-                        # Elegir la mejor máscara
+                        # Mejor máscara
                         mejor_idx = np.argmax(scores)
                         mascara_sam = masks[mejor_idx]
                         
-                        # Mejorar la máscara
+                        # Mejorar
                         mascara_final = mejorar_mascara_simple(mascara_sam, img_np)
                         
                         # Guardar
@@ -196,9 +209,10 @@ if archivo:
                         st.error(f"❌ Error: {e}")
                         st.exception(e)
     
+    # Lista de paredes
     if st.session_state.paredes:
         st.markdown("---")
-        st.markdown("### 📋 Paredes Pintadas:")
+        st.markdown("### 📋 Paredes:")
         for i, p in enumerate(st.session_state.paredes):
             col_a, col_b, col_c, col_d = st.columns([1, 2, 2, 1])
             with col_a:
@@ -206,24 +220,23 @@ if archivo:
             with col_b:
                 st.markdown(f'<div style="background:{p["color"]}; height:40px; border-radius:8px; border:2px solid #000;"></div>', unsafe_allow_html=True)
             with col_c:
-                st.markdown(f"*Intensidad: {int(p['intensidad']*100)}%*")
+                st.markdown(f"*{int(p['intensidad']*100)}%*")
             with col_d:
-                if st.button("❌", key=f"del{i}"):
+                if st.button("❌", key=f"d{i}"):
                     st.session_state.paredes.pop(i)
                     st.rerun()
 
 else:
-    st.info("👆 Sube una foto de tu habitación")
+    st.info("👆 Sube una foto")
 
 st.markdown("---")
 st.markdown("""
-### 🚀 Características:
+### 🚀 Aplicación Directa de Color:
 
-✅ **MobileSAM** - Detección inicial de la pared  
-✅ **Relleno de huecos** - Pinta detrás de cables y sombras  
-✅ **Expansión moderada** - Cubre más área sin pasarse  
-✅ **Exclusión de círculos** - NO pinta ventiladores  
-✅ **Color realista HSV** - Preserva textura y luminosidad
+✅ **Blend RGB directo** - Mezcla pixel por pixel  
+✅ **70% intensidad** - Color visible y realista  
+✅ **Fórmula simple** - `original × 30% + color × 70%`  
+✅ **Garantizado** - El color SIEMPRE se ve
 
-💡 **Simple pero efectivo** - Enfoque balanceado
+💡 **Sube intensidad al 90-100% para color más fuerte**
 """)
