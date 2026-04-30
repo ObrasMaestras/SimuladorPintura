@@ -172,15 +172,15 @@ if archivo:
                             predictor.set_image(img_np)
                             
                             # Generar 3 máscaras y elegir por SCORE (la IA decide)
-                              masks, scores, _ = predictor.predict(
-                              point_coords=np.array([[x, y]]),
-                              point_labels=np.array([1]),
-                              multimask_output=True,
-                             )
+                            masks, scores, _ = predictor.predict(
+                            point_coords=np.array([[x, y]]),
+                            point_labels=np.array([1]),
+                            multimask_output=True,
+                            )
 
                             # Elegir por SCORE (mejor detección según la IA)
-                              mejor = np.argmax(scores)
-                              mask = masks[mejor]
+                            mejor = np.argmax(scores)
+                            mask = masks[mejor]
                             
                             # Mejorar máscara (solo rellenar huecos internos)
                             mask_mejorada = mejorar_mascara(mask)
