@@ -206,7 +206,22 @@ else:
     st.info("👆 Sube una foto de tu habitación")
 
 st.markdown("---")
-st.markdown("""
-### 🚀 Especificaciones Técnicas:
+st.markdown("### 🚀 Especificaciones Técnicas:")
+st.markdown("#### 1️⃣ Alpha Blending (0.6 original + 0.4 color)")
+st.code("pixel_final = pixel_original × 0.6 + color_hex × 0.4", language="python")
+st.markdown("- ✅ Preserva **60% de la textura original**")
+st.markdown("- ✅ Aplica **40% del color nuevo**")
+st.markdown("- ✅ Sombras, brillos y granulado visibles")
 
-#### 1️⃣ **Alpha Blending (0.6 original + 0.4 color)**
+st.markdown("#### 2️⃣ MobileSAM - Máscara de Mayor Confianza")
+st.markdown("- Genera 3 máscaras candidatas (multimask_output=True)")
+st.markdown("- Selecciona automáticamente la de **mayor score**")
+st.markdown("- Rellena huecos internos (binary_fill_holes)")
+st.markdown("- Respeta bordes de objetos")
+
+st.markdown("#### 3️⃣ Renderizado Realista")
+st.markdown("- NO es color sólido opaco")
+st.markdown("- La textura de la pared atraviesa el color")
+st.markdown("- Efecto como pintura real translúcida")
+
+st.markdown("💡 **Resultado:** Simulación fotorealista de pintura profesional")
