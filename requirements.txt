@@ -6,5 +6,6 @@ torch==2.0.1
 torchvision==0.15.2
 timm==0.9.12
 scipy==1.11.4
+opencv-python-headless==4.8.1.78
 git+https://github.com/ChaoningZhang/MobileSAM.git
 requests==2.31.0
